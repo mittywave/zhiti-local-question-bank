@@ -1,5 +1,17 @@
 import { parseStudioPages, type StudioBox, type StudioPage, type StudioDiagram } from "./answer-studio";
 
+/** Asynchronous encoding avoids synchronous JPEG work on the UI thread.
+ * Preserve existing dimensions and quality; release backing canvas memory.
+ */
+async function canvasDataUrl(canvas:HTMLCanvasElement,type:string,quality?:number) {
+  try {
+    const blob=await new Promise<Blob>((resolve,reject)=>canvas.toBlob(value=>value?resolve(value):reject(new Error('Image encoding failed')),type,quality));
+    return await new Promise<string>((resolve,reject)=>{
+      const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob);
+    });
+  } finally {canvas.width=0;canvas.height=0;}
+}
+
 export async function loadStudioImage(source:string):Promise<HTMLImageElement> {
   return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(new Error("无法读取原图"));image.src=source;});
 }
@@ -9,13 +21,14 @@ export async function cropStudioImage(source:string,box:StudioBox,width=600) {
   canvas.width=Math.min(width,sw);canvas.height=Math.max(1,Math.round(canvas.width*sh/sw));
   const ctx=canvas.getContext("2d")!;ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);
   ctx.drawImage(image,image.width*box.x/1000,image.height*box.y/1000,sw,sh,0,0,canvas.width,canvas.height);
-  return {image:canvas.toDataURL("image/png"),width:canvas.width,height:canvas.height};
+  const result={image:"",width:canvas.width,height:canvas.height};
+  result.image=await canvasDataUrl(canvas,"image/png");return result;
 }
 export async function resizeStudioImage(source:string,edge=2200) {
   const image=await loadStudioImage(source),canvas=document.createElement("canvas"),scale=Math.min(1,edge/Math.max(image.width,image.height));
   canvas.width=Math.round(image.width*scale);canvas.height=Math.round(image.height*scale);
   const ctx=canvas.getContext("2d")!;ctx.fillStyle="#fff";ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);
-  return canvas.toDataURL("image/jpeg",.94);
+  return canvasDataUrl(canvas,"image/jpeg",.94);
 }
 export type StudioPageBatchMeta = { fileName:string; batchIndex:number; batchCount:number; pageStart:number; pageEnd:number };
 export type StudioPageBatchHandler = (pages:StudioPage[],meta:StudioPageBatchMeta)=>Promise<void>|void;
@@ -46,7 +59,7 @@ export async function readStudioFilesInBatches(files:File[],role:StudioPage["rol
             const page=await pdf.getPage(n),base=page.getViewport({scale:1}),viewport=page.getViewport({scale:3200/Math.max(base.width,base.height)});
             const canvas=document.createElement("canvas");canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
             await page.render({canvas,canvasContext:canvas.getContext("2d")!,viewport}).promise;
-            await add(canvas.toDataURL("image/jpeg",.97),n,pages);page.cleanup();
+            await add(await canvasDataUrl(canvas,"image/jpeg",.97),n,pages);page.cleanup();
           }
           await onBatch(pages,{fileName:file.name,batchIndex:Math.floor(offset/batchSize)+1,batchCount,pageStart:batch[0],pageEnd:batch[batch.length-1]});
         }
@@ -83,5 +96,5 @@ export async function studioDrawingContact(bases:StudioDiagram[],answers:string[
     }
     y+=heights[i];
   });
-  return canvas.toDataURL("image/jpeg",.95);
+  return canvasDataUrl(canvas,"image/jpeg",.95);
 }

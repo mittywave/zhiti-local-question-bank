@@ -28,7 +28,7 @@ test('all Studio Word modes preserve repaired math and consistent native display
   const paragraphs=studioAnswerParagraphs(analysis);
   assert.ok(paragraphs.some(p=>p.text.startsWith('$$\n')&&p.text.endsWith('\n$$')),'multiline equation remains one logical paragraph');
   for(const mode of ['full','text','steps'])for(const includeTranscriptionWarnings of [true,false]) {
-    const blob=await buildStudioWord(draft,mode,{transcription:true,bestEffort:true,includeTranscriptionWarnings});
+    const blob=await buildStudioWord(draft,mode,{transcription:true,bestEffort:true,reviewCopy:true,includeTranscriptionWarnings});
     const zip=await JSZip.loadAsync(await blob.arrayBuffer());
     const xml=await zip.file('word/document.xml').async('string');
     assert.match(xml,/\u211d/);

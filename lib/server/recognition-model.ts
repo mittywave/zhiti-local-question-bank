@@ -1,53 +1,33 @@
-import { callAntigravityGemini, type AntigravityResult } from "./antigravity-gemini";
 import { recognitionReasoningEffort } from "./recognition-model-rules.mjs";
+import { callStructuredAi, type AiGatewayResult } from "./ai-gateway";
+import { aiTimeoutMs } from "./ai-http";
 
-type UpstreamResult = AntigravityResult;
-type RecognitionModelInput = { apiKey: string; prompt: string; image: string; schema: Record<string, unknown>; schemaName: string };
+type RecognitionModelInput = {
+  prompt: string;
+  image: string;
+  schema: Record<string, unknown>;
+  schemaName: string;
+  signal?: AbortSignal;
+};
 
-function apiBase() {
-  let base = (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim().replace(/\/+$/, "");
-  base = base.replace(/\/(responses|chat\/completions)$/i, "");
-  if (!/\/v1$/i.test(base)) base += "/v1";
-  return base;
-}
-
-function outputText(payload: Record<string, unknown>) {
-  if (typeof payload.output_text === "string") return payload.output_text;
-  const output = Array.isArray(payload.output) ? payload.output as Array<{ content?: Array<{ type?: string; text?: string }> }> : [];
-  return output.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
-}
-
-async function callResponses(input: RecognitionModelInput): Promise<UpstreamResult> {
-  const response = await fetch(`${apiBase()}/responses`, {
-    method: "POST", headers: { Authorization: `Bearer ${input.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", store: false, reasoning: { effort: recognitionReasoningEffort() }, input: [{ role: "user", content: [{ type: "input_text", text: input.prompt }, { type: "input_image", image_url: input.image, detail: "high" }] }], text: { format: { type: "json_schema", name: input.schemaName, strict: true, schema: input.schema } } }),
+export async function callRecognitionModel(input: RecognitionModelInput): Promise<AiGatewayResult> {
+  return callStructuredAi({
+    role: "recognition",
+    signal: input.signal,
+    timeoutMs: aiTimeoutMs(process.env.RECOGNITION_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS, 180_000),
+    prompt: input.prompt,
+    images: [input.image],
+    schema: input.schema,
+    schemaName: input.schemaName,
+    reasoningEffort: recognitionReasoningEffort(),
+    missingMessage: "尚未配置智能识别",
+    // Answer Studio owns retry/backoff. Authentication, rate limits and timeouts
+    // should remain single-protocol failures, but generic 5xx/protocol errors may
+    // indicate an incompatible wire API and are allowed to try the next adapter.
+    stopAutoFallbackStatuses: input.schemaName.startsWith("teacher_")
+      ? [401, 403, 408, 429]
+      : [],
   });
-  const payload = await response.json().catch(() => ({})) as Record<string, unknown> & { error?: { message?: string } };
-  return { status: response.status, retryAfter: response.headers.get("retry-after"), text: response.ok ? outputText(payload) : undefined, error: payload.error?.message || (!response.ok ? `Responses 请求失败（${response.status}）` : undefined) };
-}
-
-async function callChatCompletions(input: RecognitionModelInput): Promise<UpstreamResult> {
-  const response = await fetch(`${apiBase()}/chat/completions`, {
-    method: "POST", headers: { Authorization: `Bearer ${input.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", reasoning_effort: recognitionReasoningEffort(), messages: [{ role: "user", content: [{ type: "text", text: input.prompt }, { type: "image_url", image_url: { url: input.image, detail: "high" } }] }], response_format: { type: "json_schema", json_schema: { name: input.schemaName, strict: true, schema: input.schema } } }),
-  });
-  const payload = await response.json().catch(() => ({})) as { choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>; error?: { message?: string } };
-  const content = payload.choices?.[0]?.message?.content;
-  return { status: response.status, retryAfter: response.headers.get("retry-after"), text: response.ok ? typeof content === "string" ? content : content?.find((item) => item.type === "text")?.text : undefined, error: payload.error?.message || (!response.ok ? `Chat Completions 请求失败（${response.status}）` : undefined) };
-}
-
-export async function callRecognitionModel(input: RecognitionModelInput): Promise<UpstreamResult> {
-  const mode = process.env.OPENAI_API_MODE || "auto";
-  if (mode === "antigravity_gemini") return callAntigravityGemini(process.env.OPENAI_BASE_URL || "https://api.openai.com", input.apiKey, process.env.OPENAI_VISION_MODEL || "gemini-3.8-flash-high", input.prompt, [input.image], input.schema, recognitionReasoningEffort());
-  if (mode === "chat_completions") return callChatCompletions(input);
-  const first = await callResponses(input);
-  if (first.text && first.status < 400) return first;
-  // Studio controls backoff. Do not immediately retry a rate limit or auth
-  // error through a different protocol before its Retry-After has elapsed.
-  if (input.schemaName.startsWith("teacher_") && [401,403,408,429,500,502,503,504].includes(first.status)) return first;
-  const fallback = await callChatCompletions(input);
-  if (!fallback.error) fallback.error = first.error;
-  return fallback;
 }
 
 export function parseRecognitionModelText(text: string) {

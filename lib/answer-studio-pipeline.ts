@@ -1,3 +1,4 @@
+import { studioSnapshot } from './answer-studio-snapshot';
 import {
   attachAnswerOnlyRecords, matchStudioAnswers, mergeStudioRecords, sameStudioStem, studioKey,
   type StudioBox, type StudioDiagram, type StudioDraft, type StudioPage, type StudioQuestion,
@@ -5,7 +6,7 @@ import {
 } from './answer-studio';
 import { normalizeStudioTextFields } from './answer-studio-normalize';
 import { studioFullFiguresReady, studioFiguresReady, studioTextReady } from './answer-studio-output';
-import { runStudioWindow, studioConcurrencyState, StudioRequestError, type StudioRetryNotice, type StudioRetryRuntime } from './answer-studio-concurrency';
+import { runStudioOrdered, runStudioWindow, studioConcurrencyState, StudioRequestError, type StudioRetryNotice, type StudioRetryRuntime } from './answer-studio-concurrency';
 export const STUDIO_DRAWINGS_REVISION=3;
 export type StudioDrawingContext={answerOnly:boolean;hasSourceDiagrams:boolean};
 
@@ -46,12 +47,12 @@ function needsFreshContext(records:StudioRecord[],draft:StudioDraft,role:StudioP
 }
 /** Used by both the simple webpage and regression tests; no human approval is fabricated. */
 export async function transcribeStudio(draft:StudioDraft, service:StudioPipelineServices, options:StudioPipelineOptions={}) {
-  const next:StudioRunDraft=structuredClone(draft);
+  const next:StudioRunDraft=studioSnapshot(draft);
   next.questions=next.questions.map(normalizeStudioTextFields);
   next.answers=next.answers.map(normalizeStudioTextFields);
   const pages=next.pages.filter(p=>p.selected);
   if(!pages.length)throw new Error('没有可处理的页面');
-  const save=async()=>{next.updatedAt=Date.now();await service.checkpoint(structuredClone(next));};
+  const save=async()=>{next.updatedAt=Date.now();await service.checkpoint(studioSnapshot(next));};
   const hadUnprocessedPages=pages.some(p=>!p.processed);
   const textState=studioConcurrencyState(options.textConcurrency);
   const reportRetry=(notice:StudioRetryNotice)=>service.progress(`服务暂时繁忙（${notice.status||'网络'}），${Math.ceil(notice.delayMs/1000)} 秒后重试 ${notice.attempt}/2；当前并发 ${notice.limit} 路…`);
@@ -65,26 +66,27 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
   // Establish originals before answers. Never mix both roles in one window.
   for(const role of ['question','answer'] as const) {
     const remaining=pages.filter(p=>p.role===role&&!p.processed);
-    let offset=0;
-    while(offset<remaining.length) {
-      // A single seed page supplies initial lesson/section context for this role.
-      const seeded=pages.some(p=>p.role===role&&p.processed);
-      const batch=remaining.slice(offset,offset+(seeded?textState.limit:1));
-      offset+=batch.length;
-      const context=contextNow(),concurrent=batch.length>1;
-      service.progress(`正在转录${role==='question'?'原题':'答案'}：已保存 ${pages.filter(p=>p.processed).length}/${pages.length} 页，本批 ${batch.length} 页（最多 ${textState.limit} 路）…`);
-      const results=await runStudioWindow(batch,async page=>cached(page)||{
-        hash:page.hash,context,concurrent,
-        records:(await service.recognize(page,context,{concurrent})).map(normalizeStudioTextFields),
+    // Checkpoint callbacks are serialized; successful out-of-order pages are
+    // durable but cannot be merged ahead of a missing predecessor.
+    let persistence:Promise<void>=Promise.resolve();
+    const persist=(page:StudioPage,entry:PendingPage)=>{
+      persistence=persistence.then(async()=>{pending[page.id]=entry;await save();});
+      return persistence;
+    };
+    const recognize=async(page:StudioPage):Promise<PendingPage>=>{
+      const context=contextNow(),concurrent=textState.limit>1&&pages.some(p=>p.role===role&&p.processed);
+      const [result]=await runStudioWindow([page],async target=>cached(target)||{
+        hash:target.hash,context,concurrent,
+        records:(await service.recognize(target,context,{concurrent})).map(normalizeStudioTextFields),
       },textState,reportRetry,options.retryRuntime);
-      // Store every success BEFORE encountering a failed earlier page. On resume
-      // later successes are reused, but are never merged ahead of a missing page.
-      results.forEach((result,i)=>{if(result.status==='fulfilled')pending[batch[i].id]=result.value;});
-      await save();
-      for(const [index,page] of batch.entries()) {
-        const result=results[index];
-        if(result.status==='rejected')throw pageFailure(page,result.reason);
-        let entry=result.value;
+      if(result.status==='rejected')throw pageFailure(page,result.reason);
+      return result.value;
+    };
+    const consume=async(page:StudioPage,entry:PendingPage)=>{
+      // Finish writes from peers before mutating the ordered snapshot. No
+      // request is started while this slot performs a context-sensitive review.
+      await persistence;
+
         const freshContext=contextNow();
         if(entry.concurrent&&entry.context!==freshContext&&needsFreshContext(entry.records,next,page.role)) {
           service.progress(`正在复核第 ${page.page} 页（${page.name}）的跨页归属…`);
@@ -92,7 +94,7 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
           if(review.status==='rejected')throw pageFailure(page,review.reason);
           entry={hash:page.hash,context:freshContext,concurrent:false,records:review.value};
           pending[page.id]=entry;
-          await save();
+          await persist(page,entry);
         }
         const records=entry.records;
         if(page.role==='answer') {
@@ -110,9 +112,12 @@ export async function transcribeStudio(draft:StudioDraft, service:StudioPipeline
         }
         page.processed=true;
         delete pending[page.id];
-        await save();
-      }
-    }
+        persistence=persistence.then(save);await persistence;
+      service.progress(`已保存 ${pages.filter(p=>p.processed).length}/${pages.length} 页（${textState.limit} 路并发）`);
+    };
+    const seeded=pages.some(p=>p.role===role&&p.processed);
+    if(!seeded&&remaining.length)await runStudioOrdered(remaining.splice(0,1),recognize,textState,consume,persist);
+    await runStudioOrdered(remaining,recognize,textState,consume,persist);
   }
   delete next.pendingTranscriptions;
   if(next.inputMode!=='answers' && (hadUnprocessedPages || !studioTextReady(next))) {

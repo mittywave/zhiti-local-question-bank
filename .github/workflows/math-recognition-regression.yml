@@ -1,0 +1,71 @@
+name: Math and recognition regression
+on:
+  push:
+    branches: [main, 'integration/**', 'feature/**', 'fix/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: math-recognition-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test:studio
+      - run: npm run benchmark:studio
+      - name: Full build and regression
+        shell: bash
+        run: |
+          set +e
+          npm test > regression.log 2>&1
+          status=$?
+          tail -n 15 regression.log
+          if [ "$status" -ne 0 ]; then grep -A 28 '^not ok' regression.log || true; fi
+          exit "$status"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-log
+          path: regression.log
+          if-no-files-found: ignore
+          retention-days: 7
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: python -m pip install playwright
+      - run: python -m playwright install --with-deps chromium > playwright-install.log 2>&1
+      - run: node scripts/build-studio-browser.mjs .studio-browser-test
+      - run: python scripts/verify-studio-browser.py .studio-browser-test --out studio-browser-results
+      - run: node scripts/build-ai-settings-browser.mjs .ai-settings-browser-test
+      - run: python scripts/verify-ai-settings-browser.py .ai-settings-browser-test --out ai-settings-browser-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: studio-browser-results
+          path: |
+            studio-browser-results
+            ai-settings-browser-results
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,0 +1,12 @@
+export type AiProviderWireApi = "auto" | "responses" | "chat_completions" | "antigravity_gemini";
+export type AiProviderRole = "recognition" | "text" | "diagram" | "grading";
+export type AiProviderModel = { id: string; displayName?: string };
+export const AI_PROVIDER_WIRE_APIS: readonly AiProviderWireApi[];
+export function normalizeAiProviderWireApi(value: unknown): AiProviderWireApi;
+export function normalizeAiProviderApiBase(value: unknown): string;
+export function aiProviderModelsUrl(baseUrl: unknown, wireApi?: unknown): string;
+export function parseAiProviderModelCatalog(payload: unknown): AiProviderModel[];
+export function selectAiProviderRoleModel(config: { recognitionModel?: string; textModel?: string; diagramModel?: string; gradingModel?: string }, role: AiProviderRole): string;
+export function shouldTryAlternateAiProtocol(result: { status?: number; retryAfter?: string | null }): boolean;
+export function aiProviderAutoProtocolOrder(model: unknown): Array<Exclude<AiProviderWireApi, "auto">>;
+export function canReuseAiProviderKey(storedBaseUrl: unknown, nextBaseUrl: unknown): boolean;

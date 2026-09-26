@@ -65,14 +65,11 @@ export async function generateSubmissionReport(submissionId: string) {
   const submission = await readTeacherSubmission(submissionId, { id: owner.owner_user_id, email: "", role: "member" });
   const fallback = buildFallbackSubmissionReport(submission.gradingItems);
   let report = fallback;
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (apiKey) {
-    try {
-      const result = await callHomeworkModel({ apiKey, images: [], prompt: buildSubmissionReportPrompt(submission.gradingItems),
-        schema: submissionReportSchema, schemaName: "homework_submission_report" });
-      if (result.text) report = normalizeHomeworkReport(parseHomeworkModelText(result.text));
-    } catch { /* Deterministic fallback keeps the automatic pipeline available. */ }
-  }
+  try {
+    const result = await callHomeworkModel({ images: [], prompt: buildSubmissionReportPrompt(submission.gradingItems),
+      schema: submissionReportSchema, schemaName: "homework_submission_report" });
+    if (result.text) report = normalizeHomeworkReport(parseHomeworkModelText(result.text));
+  } catch { /* Deterministic fallback keeps the automatic pipeline available. */ }
   const { saveSubmissionReport } = await import("./homework-capabilities");
   await saveSubmissionReport(submissionId, owner.owner_user_id, report, CAPABILITY_FRAMEWORK_VERSION);
   return report;
@@ -138,10 +135,8 @@ export async function processHomeworkSubmissionPage(submissionId: string, pageNu
       for (const question of gradeable) await upsertResult({ submissionId, question, pageId: studentPage?.id ?? null, verdict: "unreadable",
         studentAnswer: "", feedback: reason, errorType, confidence: 0, bbox: null, requiresReview: false });
     } else {
-      const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey) throw new Error("尚未配置智能识别 API");
       const images = await Promise.all([homeworkAssetDataUrl(template.asset_id), homeworkAssetDataUrl(studentPage.processed_asset_id)]);
-      const result = await callHomeworkModel({ apiKey, images, prompt: buildHomeworkGradingPrompt(pageNumber, gradeable.map((question) => ({
+      const result = await callHomeworkModel({ images, prompt: buildHomeworkGradingPrompt(pageNumber, gradeable.map((question) => ({
         questionNumber: question.question_number, type: question.type, stem: question.stem, answer: question.answer, analysis: question.analysis,
       }))), schema: homeworkGradingSchema, schemaName: "homework_page_grading" });
       if (!result.text) throw new Error(result.error || `第 ${pageNumber} 页批改失败`);

@@ -12,13 +12,13 @@ const ts=require('typescript');
 // Compile the actual pure implementation, without a model, browser or DOCX
 // package mock. DOCX packer integration is covered in the companion test.
 const dir=await mkdtemp(join(tmpdir(),'zhiti-word-math-'));
-for(const name of ['math-omml','xml-text','math-text','studio-math-layout']) {
+for(const name of ['math-grid','math-omml','xml-text','math-text','studio-math-layout']) {
   const file=new URL(`../lib/${name}.ts`,import.meta.url);
   const source=await readFile(file,'utf8');
   const result=ts.transpileModule(source,{fileName:file.pathname,compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}});
   await writeFile(join(dir,name+'.js'),result.outputText);
 }
-for(const name of ['math-notation.mjs','math-text-core.mjs','math-source.mjs']) await writeFile(join(dir,name),await readFile(new URL('../lib/'+name,import.meta.url)));
+for(const name of ['math-capabilities.mjs','math-notation.mjs','math-text-core.mjs','math-source.mjs']) await writeFile(join(dir,name),await readFile(new URL('../lib/'+name,import.meta.url)));
 // Unit-test the actual escape-normalization function without importing the
 // unrelated question database/types module or duplicating its implementation.
 const normalizerSource=await readFile(new URL('../lib/answer-studio-normalize.ts',import.meta.url),'utf8');
@@ -118,13 +118,13 @@ for(const command of ['frac','dfrac','tfrac']) test(`native ${command} remains e
   const xml=studioWordEquationXml(`\\${command}{1}{\\frac{1}{2}}`,true);
   assert.match(xml,/^<m:oMathPara>/);
   assert.equal((xml.match(/<m:f>/g)||[]).length,2);
-  assert.ok([...xml.matchAll(/<w:sz w:val="(\d+)"\/>/g)].every(m=>m[1]==='24'));
+  assert.ok([...xml.matchAll(/<w:sz w:val="(\d+)"\/>/g)].every(m=>m[1]==='22'));
 });
-test('plain and complex display lines share 12 pt while prose math uses 11 pt',()=>{
+test('plain and complex display lines share one 11 pt base size',()=>{
   for(const value of [String.raw`k_{CD}=-\frac{1}{2}`,String.raw`\frac{\frac12 k_{CD}}{1+\frac12 k_{CD}}=\frac43`]) {
     const xml=studioWordEquationXml(value,true);
-    assert.match(xml,/<w:sz w:val="24"\/>/);
-    assert.doesNotMatch(xml,/<w:sz w:val="(?:22|26|30)"\/>/);
+    assert.match(xml,/<w:sz w:val="22"\/>/);
+    assert.doesNotMatch(xml,/<w:sz w:val="(?:24|26|30)"\/>/);
   }
   const inline=studioWordEquationXml(String.raw`\mathbb{R}`,false);
   assert.match(inline,/^<m:oMath>/);assert.match(inline,/<w:sz w:val="22"\/>/);

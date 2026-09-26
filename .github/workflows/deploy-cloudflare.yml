@@ -1,36 +1,44 @@
 name: Deploy to Cloudflare Workers
-
 on:
   workflow_dispatch:
-
+    inputs:
+      database_backup_confirmed:
+        description: 'I have a current remote D1 backup and reviewed pending migrations'
+        required: true
+        type: boolean
+        default: false
 permissions:
   contents: read
-
+concurrency:
+  group: cloudflare-production-deploy
+  cancel-in-progress: false
 jobs:
   deploy:
     name: Validate and deploy
     runs-on: ubuntu-latest
     timeout-minutes: 20
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+      - name: Require main and a confirmed database backup
+        env:
+          BACKUP_CONFIRMED: ${{ inputs.database_backup_confirmed }}
+        run: |
+          test "$GITHUB_REPOSITORY" = mittywave/zhiti-local-question-bank || { echo "Deploy only from mittywave"; exit 1; }
+          test "$GITHUB_REF" = refs/heads/main || { echo "Deploy only from main"; exit 1; }
+          test "$BACKUP_CONFIRMED" = true || { echo "Create a D1 backup and review migrations before deploying"; exit 1; }
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Test
-        run: npm test
-
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - name: Apply reviewed D1 migrations before deploying
+        run: npx wrangler d1 migrations apply zhiti-question-bank --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       - name: Deploy to Cloudflare Workers
         run: npm run deploy
         env:

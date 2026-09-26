@@ -106,14 +106,55 @@ export async function studioApi<T>(url: string, body: unknown): Promise<T> {
 }
 
 /** Used only by Studio routes; ordinary question-bank API responses stay unchanged. */
-export function studioUpstreamFailure(result: { status: number; error?: string; retryAfter?: string | null }, fallback: string) {
+export function studioUpstreamFailure(result: { status: number; error?: string; retryAfter?: string | null; terminal?: boolean }, fallback: string) {
   const status = result.status >= 400 && result.status <= 599 ? result.status : 502;
-  return Response.json({ error: result.error || fallback, retryable: result.status >= 400 && retryStatuses.has(status) }, {
+  return Response.json({ error: result.error || fallback, retryable: !result.terminal && result.status >= 400 && retryStatuses.has(status) }, {
     status, headers: result.retryAfter ? { 'Retry-After': result.retryAfter } : undefined,
   });
 }
 
 export function studioCaughtFailure(error: unknown, fallback: string) {
+  if(error instanceof Error&&error.name==='AbortError')return Response.json({error:"Recognition cancelled",retryable:false},{status:499});
   const network = error instanceof TypeError && /fetch|network|socket|ECONN|timeout/i.test(error.message);
   return Response.json({ error: error instanceof Error ? error.message : fallback, retryable: network }, { status: network ? 502 : 500 });
+}
+
+/** Rolling, bounded-lookahead execution with an ordered commit barrier.
+ * Completion of a fast page refills a free slot; a slow peer does not impose a
+ * whole-window barrier. Once ANY task/commit fails, launch no new work, drain
+ * existing requests and persist their successes before propagating the error.
+ * commit runs before refilling its released slot, leaving room for one
+ * sequential context-review request without exceeding the concurrency limit.
+ */
+export async function runStudioOrdered<T,R>(
+  items:readonly T[], worker:(item:T)=>Promise<R>, state:StudioConcurrencyState,
+  commit:(item:T,value:R)=>Promise<void>, settled:(item:T,value:R)=>Promise<void> = async()=>{},
+):Promise<void> {
+  const active=new Map<number,Promise<void>>();
+  const ready=new Map<number,PromiseSettledResult<R>>();
+  const lookahead=Math.max(1,state.limit*2);
+  let launch=0,cursor=0,halted=false;
+  const start=(index:number)=>{
+    const task=Promise.resolve().then(()=>worker(items[index])).then(async value=>{
+      await settled(items[index],value);
+      ready.set(index,{status:'fulfilled',value});
+    }).catch((reason:unknown)=>{halted=true;ready.set(index,{status:'rejected',reason});})
+      .finally(()=>{active.delete(index);});
+    active.set(index,task);
+  };
+  try {
+    while(cursor<items.length){
+      while(ready.has(cursor)){
+        const outcome=ready.get(cursor)!;ready.delete(cursor);
+        if(outcome.status==='rejected')throw outcome.reason;
+        await commit(items[cursor],outcome.value);cursor++;
+      }
+      while(!halted&&launch<items.length&&launch<cursor+lookahead&&active.size<state.limit)start(launch++);
+      if(active.size)await Promise.race(active.values());
+      else if(cursor<items.length&&!ready.has(cursor))throw new Error('Ordered scheduler stopped without a result');
+    }
+  } finally {
+    halted=true;
+    await Promise.all(active.values());
+  }
 }

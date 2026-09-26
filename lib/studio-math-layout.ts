@@ -1,10 +1,11 @@
+import { standaloneRuledArrayLine } from './math-grid';
+import { WORD_MATH_STYLE } from './math-capabilities.mjs';
 import { splitMathText } from './math-text';
 import { mathOmml } from './math-omml';
-import { repairMathSource, scanMathSource } from './math-source.mjs';
+import { repairMathSource, scanMathSource, splitMathParagraphs } from './math-source.mjs';
 
-export const STUDIO_INLINE_MATH_SIZE = 22; // half points: 11 pt
-export const STUDIO_DISPLAY_MATH_SIZE = 24; // half points: 12 pt
-export type StudioMathStyle = { color?:string; bold?:boolean; underline?:boolean };
+export const STUDIO_MATH_SIZE = WORD_MATH_STYLE.baseSize;
+export type StudioMathStyle = { color?:string; bold?:boolean; underline?:boolean;mathAlignment?:'left'|'center'|'right' };
 const escapeXml = (s:string) => s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
 
 /** A calculation line, optionally introduced by a short Chinese proof cue.
@@ -19,12 +20,12 @@ export function isStudioDisplayMathLine(text:string) {
 }
 function styledMathXml(xml:string,display:boolean,style:StudioMathStyle) {
   if(style.color&&!/^[\da-f]{6}$/i.test(style.color))throw new Error('Invalid equation color');
-  const size=display?STUDIO_DISPLAY_MATH_SIZE:STUDIO_INLINE_MATH_SIZE;
-  const properties=`<w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math" w:eastAsia="Songti SC"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/>${style.bold?'<w:b/>':''}${style.color?`<w:color w:val="${style.color}"/>`:''}</w:rPr>`;
+  const size=STUDIO_MATH_SIZE;
+  const properties=`<w:rPr><w:rFonts w:ascii="${WORD_MATH_STYLE.font}" w:hAnsi="${WORD_MATH_STYLE.font}" w:eastAsia="Songti SC"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/>${style.bold?'<w:b/>':''}${style.color?`<w:color w:val="${style.color}"/>`:''}</w:rPr>`;
   // Identical base size for every run. Word retains its own script scaling.
   const body=xml.replace(/<m:r>(<m:rPr>[\s\S]*?<\/m:rPr>)?/g,`<m:r>$1${properties}`);
   const equation=`<m:oMath>${body}</m:oMath>`;
-  return display?`<m:oMathPara><m:oMathParaPr><m:jc m:val="left"/></m:oMathParaPr>${equation}</m:oMathPara>`:equation;
+  return display?`<m:oMathPara><m:oMathParaPr><m:jc m:val="${style.mathAlignment??'left'}"/></m:oMathParaPr>${equation}</m:oMathPara>`:equation;
 }
 export function studioWordEquationXml(source:string,display=false,style:StudioMathStyle={}) {
   return styledMathXml(mathOmml(style.underline?`\\underline{${source}}`:source),display,style);
@@ -40,9 +41,13 @@ export function studioWordDisplayXml(text:string,style:StudioMathStyle={}) {
 export function studioMathIssues(text:string):string[] {
   const source=repairMathSource(text);
   const issues=scanMathSource(source).issues.map(issue=>`\u516c\u5f0f\u5206\u9694\u7b26\u4e0d\u5b8c\u6574\uff08\u4f4d\u7f6e ${issue.offset+1}\uff09`);
-  for(const segment of splitMathText(source).filter(s=>s.kind==='math')) {
-    try { mathOmml(segment.value); }
-    catch(error) { issues.push(error instanceof Error?error.message:'\u516c\u5f0f\u8f6c\u6362\u5931\u8d25'); }
+  for(const [lineIndex,line] of splitMathParagraphs(source).entries()) {
+    try {
+      const ruled=standaloneRuledArrayLine(line);
+      const expressions=ruled?ruled.rows.flat():splitMathText(line).filter(s=>s.kind==='math').map(s=>s.value);
+      for(const value of expressions)mathOmml(value);
+    } catch(error){issues.push(`line ${lineIndex+1}: ${error instanceof Error?error.message:'Invalid math'}`);}
   }
+
   return [...new Set(issues)];
 }

@@ -88,7 +88,7 @@ test('page failures report the PDF page and resume without re-recognizing comple
     if(p.page===2)throw new Error('识别服务暂时不可用');
     return normalizeStudioRecords({records:[{...record([],'第一页原文'),number:'1'}]},p.id,'寒假');
   },crop:async()=>({image:'evidence',width:300,height:300}),drawings:async()=>({warnings:[],diagrams:[]}),checkpoint:async d=>{last=d;},progress:()=>{}};
-  await assert.rejects(()=>transcribeStudio(draft,service),/第 2 页.*识别服务暂时不可用.*已保存/s);
+  await assert.rejects(()=>transcribeStudio(draft,service),/第 2 页.*识别服务暂时不可用.*已保(?:留|存)/s);
   assert.equal(last.pages[0].processed,true);assert.notEqual(last.pages[1].processed,true);
   const result=await transcribeStudio(last,{...service,recognize:async p=>{
     assert.equal(p.page,2);

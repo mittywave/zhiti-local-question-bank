@@ -1,3 +1,5 @@
+import { aiProviderModelsUrl } from "../ai-provider-rules.mjs";
+import { aiFetch, readAiBody } from "./ai-http";
 export type AntigravityResult = { text?: string; error?: string; status: number; retryAfter?: string | null };
 
 type JsonSchema = Record<string, unknown>;
@@ -28,11 +30,8 @@ function geminiResponseSchema(value: unknown): unknown {
   return output;
 }
 
-function antigravityApiBase(configuredBase: string) {
-  let base = configuredBase.trim().replace(/\/+$/, "");
-  base = base.replace(/\/antigravity\/v1beta(?:\/models)?$/i, "");
-  base = base.replace(/\/v1(?:\/(?:responses|chat\/completions))?$/i, "");
-  return `${base}/antigravity/v1beta`;
+export function antigravityApiBase(configuredBase: string) {
+  return aiProviderModelsUrl(configuredBase, "antigravity_gemini").replace(/\/models$/, "");
 }
 
 function inlineImage(image: string) {
@@ -65,10 +64,12 @@ export async function callAntigravityGemini(
   images: string[],
   schema: JsonSchema,
   reasoningEffort = "high",
+  signal?: AbortSignal,
 ): Promise<AntigravityResult> {
   const imageParts = images.map(inlineImage).filter((part): part is NonNullable<typeof part> => Boolean(part));
   const endpoint = `${antigravityApiBase(configuredBase)}/models/${encodeURIComponent(model)}:generateContent`;
-  const response = await fetch(endpoint, {
+  const response = await aiFetch(endpoint, {
+    signal,
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -81,7 +82,7 @@ export async function callAntigravityGemini(
     }),
   });
   const retryAfter = response.headers.get("retry-after");
-  const raw = await response.text();
+  const raw = await readAiBody(response);
   let payload: Record<string, unknown> = {};
   try {
     payload = JSON.parse(raw) as Record<string, unknown>;

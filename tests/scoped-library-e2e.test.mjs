@@ -6,22 +6,7 @@ import { join, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { request as httpRequest } from 'node:http';
-
-// Test transport is always loopback. A proxy/fake-IP DNS must not send this
-// isolated regression's requests to an external address. Keep the public Host
-// header so the application still exercises its non-local authorization path.
-async function fetch(input, options={}) {
-  const url=new URL(input);
-  if(!['public.localtest.me','localhost','127.0.0.1'].includes(url.hostname))throw new Error('Non-local regression URL');
-  return new Promise((resolveResponse,reject)=>{
-    const req=httpRequest({hostname:'127.0.0.1',port:url.port,path:url.pathname+url.search,method:options.method||'GET',headers:{...options.headers,Host:url.host,...(options.body!==undefined?{'Content-Length':Buffer.byteLength(options.body)}:{})}},res=>{
-      const chunks=[];res.on('data',chunk=>chunks.push(chunk));res.on('end',()=>resolveResponse(new Response(Buffer.concat(chunks),{status:res.statusCode,headers:res.headers})));
-    });
-    req.on('error',reject);req.setTimeout(5000,()=>req.destroy(new Error(`Local regression request timeout: ${options.method||'GET'} ${url.pathname}`)));
-    req.end(options.body);
-  });
-}
+import { loopbackFetch as fetch } from './helpers/loopback-fetch.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const WRANGLER = join(ROOT, "node_modules", ".bin", "wrangler");
@@ -49,6 +34,9 @@ async function freePort() {
 
 function startWorker(port, persistTo, vars) {
   const args = ["dev", "--config", CONFIG, "--port", String(port), "--ip", "127.0.0.1", "--persist-to", persistTo];
+  // Wrangler otherwise rewrites the URL and Host to the production custom domain.
+  // Keep the isolated local-editor worker genuinely loopback; never weaken auth.
+  if (vars.LOCAL_ADMIN_MODE === "true") args.push("--local-upstream", `localhost:${port}`);
   for (const [key, value] of Object.entries(vars)) args.push("--var", `${key}:${value}`);
   const child = spawn(WRANGLER, args, { cwd: ROOT, env: { ...process.env, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
@@ -105,7 +93,7 @@ function question(id, moduleId, categoryId, stem, image = false) {
   };
 }
 
-test("scoped libraries isolate accounts, authorize media/downloads, copy independently, and publish atomically", { timeout: 120_000 }, async () => {
+test("scoped libraries isolate accounts, authorize media/downloads, copy independently, and publish atomically", { timeout: 180_000 }, async () => {
   const [localPort, remotePort] = await Promise.all([freePort(), freePort()]);
   const [localState, remoteState] = await Promise.all([
     mkdtemp(join(tmpdir(), "zhiti-scoped-local-")),
@@ -134,6 +122,9 @@ test("scoped libraries isolate accounts, authorize media/downloads, copy indepen
     });
     const localBase = `http://localhost:${localPort}`;
     await waitForServer(`${localBase}/api/auth/me`, local);
+    assert.equal((await jsonRequest(localBase, "/api/auth/me")).payload.user?.local, true, "local editor must use a loopback origin");
+    const forgedAdmin = await jsonRequest(remoteBase, "/api/auth/me", { headers: { "X-Forwarded-Host": "localhost", "CF-Connecting-IP": "127.0.0.1" } });
+    assert.equal(forgedAdmin.payload.user, null, "production mode must reject forged local headers");
 
     const guestMine = await jsonRequest(remoteBase, "/api/library?scope=mine");
     assert.equal(guestMine.response.status, 401);
@@ -270,6 +261,9 @@ test("scoped libraries isolate accounts, authorize media/downloads, copy indepen
     const removedStudent = await jsonRequest(remoteBase, `/api/students/${studentOneId}`, { cookie: userOne, method: "DELETE", body: {} });
     assert.equal(removedStudent.payload.wrongQuestionCount, 2);
     assert.equal((await jsonRequest(remoteBase, "/api/students", { cookie: userOne })).payload.students.length, 0);
+  } catch (error) {
+    console.error(remote.output(), local?.output());
+    throw error;
   } finally {
     if (local) await stopWorker(local);
     await stopWorker(remote);

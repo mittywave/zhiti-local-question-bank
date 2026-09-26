@@ -1,3 +1,4 @@
+import { WORD_MATH_STYLE } from './math-capabilities.mjs';
 import { Document, Packer, Paragraph, TextRun, AlignmentType, Tab, TabStopType, Table, TableRow, TableCell, BorderStyle, WidthType, TableLayoutType, type ParagraphChild } from "docx";
 import JSZip from "jszip";
 import { richText } from "./answer-studio-rich-text";
@@ -5,6 +6,7 @@ import { assertStudioExportable, hasStudioControlCharacters, type StudioDraft, t
 import { studioDiagramVml } from "./answer-studio-diagram";
 import { ensureWordMathSettings, enlargeNestedWordMath } from "./word-math-sizing.mjs";
 import { splitMathText } from "./answer-studio-math-text";
+import { standaloneRuledArray, standaloneRuledArrayLine as ruledArrayLine } from './math-grid';
 import { mathOmml } from './math-omml';
 import { isStudioDisplayMathLine } from './studio-math-layout';
 import { repairMathSource, scanMathSource, splitMathParagraphs } from './math-source.mjs';
@@ -13,12 +15,17 @@ import { xmlSafeText } from './xml-text';
 import { placeStudioAnswers } from './answer-studio-layout';
 import { studioFiguresReady, studioIncludesQuestionFigures, studioOutputBlocker, studioOutputs, type StudioOutputMode } from './answer-studio-output';
 
-export function assertStudioMathSupported(text:string) {
+export function assertStudioMathSupported(text:string,allowBlockArrays=true) {
   text=repairMathSource(text);
-  if(scanMathSource(text).issues.length)throw new Error("公式分隔符不完整，请核对原文");
-  for(const s of splitMathText(text).filter(s=>s.kind==='math')) {
-    if(hasStudioControlCharacters(s.value))throw new Error('公式含异常控制字符，请对照原件校正');
-    mathOmml(s.value);
+  const issues=scanMathSource(text).issues;
+  if(issues.length)throw new Error(`Math delimiter is incomplete at character ${issues[0].offset+1}`);
+  for(const [lineIndex,line] of splitMathParagraphs(text).entries()){
+    const ruled=allowBlockArrays?ruledArrayLine(line):null;
+    const expressions=ruled?ruled.rows.flat():splitMathText(line).filter(s=>s.kind==='math').map(s=>s.value);
+    for(const [index,source] of expressions.entries())try{
+      if(hasStudioControlCharacters(source))throw new Error('Math contains invalid control characters');
+      mathOmml(source);
+    }catch(error){throw new Error(`line ${lineIndex+1}, expression ${index+1}: ${error instanceof Error?error.message:String(error)}`,{cause:error});}
   }
 }
 
@@ -36,7 +43,8 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   // Direct exports and resumed legacy drafts share the same non-mutating
   // normalization as recognition. Never patch the downloaded DOCX afterward.
   draft={...draft,questions:draft.questions.map(normalizeStudioTextFields)};
-  const bestEffort=!!options.bestEffort;
+  if(options.bestEffort&&!options.reviewCopy)throw new Error('Best-effort export is permitted only for an explicitly labelled review copy');
+  const bestEffort=!!options.reviewCopy&&!!options.bestEffort;
   const includeTranscriptionWarnings=options.includeTranscriptionWarnings!==false;
   const issueMap=new Map<string,string[]>(),globalIssues:string[]=[];
   const addIssue=(q:StudioQuestion,message:string)=>{const list=issueMap.get(q.id)||[];list.push(message);issueMap.set(q.id,list);};
@@ -60,7 +68,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     const fields:[string,string][]=[['解析',q.analysis],...(withStem?[['题干',q.stem] as [string,string]]:[]),...(q.answerPlacements||[]).map(p=>['短答案',p.answer] as [string,string])];
     if(withFigures)fields.push(...q.diagrams.map(d=>['图注',d.caption] as [string,string]));
     if(mode!=='steps')fields.push(...(q.tables||[]).flatMap((table,tableIndex)=>table.rows.flatMap((row,rowIndex)=>row.map((cell,cellIndex)=>[`表格${tableIndex+1}第${rowIndex+1}行第${cellIndex+1}列`,cell] as [string,string]))));
-    for(const [field,text] of fields)try{assertStudioMathSupported(text);}catch(error){
+    for(const [field,text] of fields)try{assertStudioMathSupported(text,['\u89e3\u6790','\u9898\u5e72'].includes(field));}catch(error){
       const detail=error instanceof Error?error.message:'公式转换失败';
       if(!bestEffort)throw new Error(`${[q.lesson,q.section,`第 ${q.number} 题`,field].filter(Boolean).join(' · ')}：${detail}。已转录内容仍保留在本地草稿中。`,{cause:error});
       addIssue(q,`${field}：${detail}`);
@@ -70,10 +78,12 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   const outputLabel=studioOutputs.find(output=>output.value===mode)?.label||'答案解析';
   const children: Array<Paragraph|Table> = [new Paragraph({ style:"Title", alignment:AlignmentType.CENTER, children:[new TextRun({text:`${draft.title} ${outputLabel}${options.reviewCopy?' 待校对样张':''}`,bold:true,size:32,color:"000000"})],spacing:{after:300} })];
   if(options.reviewCopy)children.push(new Paragraph({children:[new TextRun({text:'此样张仅供原件核对和排版检查，未通过正式校对，不可作为完成稿使用。',color:'C00000'})]}));
-  const safeRichText=(text:string,style:{color?:string;underline?:boolean;italicMath?:boolean;displayMath?:boolean},q:StudioQuestion,field:string):ParagraphChild[]=>{
+  const safeRichText=(text:string,style:{color?:string;underline?:boolean;italicMath?:boolean;displayMath?:boolean;mathAlignment?:'left'|'center'|'right'},q:StudioQuestion,field:string):ParagraphChild[]=>{
     if(xmlSafeText(text)!==text)addIssue(q,`${field}：含不可显示字符，已用替代符标记`);
     return richText(text,style,error=>{
-      const detail=error instanceof Error?error.message:'公式转换失败';addIssue(q,`${field}：${detail}`);
+      const detail=error instanceof Error?error.message:'公式转换失败';
+      if(!bestEffort)throw new Error(`${q.number} / ${field}: ${detail}`,{cause:error});
+      addIssue(q,`${field}：${detail}`);
     });
   };
   const paragraph = (text: string, red: boolean, keepNext=false,q?:StudioQuestion,field='文本') => new Paragraph({ keepNext, style:red?'StudioAnswer':'Normal', spacing:{line:360,after:80}, children:q?safeRichText(text,{ color:red?'C00000':'000000' },q,field):richText(text,{ color:red?'C00000':'000000' }) });
@@ -91,9 +101,40 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     const border={style:BorderStyle.SINGLE,size:4,color:'D9D9D9'};
     return new Table({layout:TableLayoutType.FIXED,width:{size:9300,type:WidthType.DXA},columnWidths:Array.from({length:columns},()=>width),borders:{top:border,bottom:border,left:border,right:border,insideHorizontal:border,insideVertical:border},rows:table.rows.map((row,rowIndex)=>new TableRow({children:Array.from({length:columns},(_,index)=>new TableCell({width:{size:width,type:WidthType.DXA},margins:{top:80,bottom:80,left:120,right:120},children:[new Paragraph({spacing:{line:300,after:0},children:safeRichText(row[index]??'', {color:table.red?'C00000':'000000',italicMath:table.red?false:undefined,displayMath:false},q,`表格${tableIndex+1}第${rowIndex+1}行第${index+1}列`)})]}))}))});
   };
+  const ruledTable=(grid:NonNullable<ReturnType<typeof standaloneRuledArray>>,red:boolean,q:StudioQuestion,field:string)=>{
+    // One table shares actual column widths across every row. Borders cannot
+    // drift as they do with separately underlined math runs or split matrices.
+    const none={style:BorderStyle.NONE,size:0,color:'FFFFFF'};
+    const rule=(n:number|undefined)=>n?{style:n===2?BorderStyle.DOUBLE:BorderStyle.SINGLE,size:6,color:red?'C00000':'000000'}:none;
+    const spaces:Record<string,number>={'':0,'\u2003':220,'\u2003\u2003':440,'\u2009':44,'\u2005':55,'\u2004':73};
+    const widths=grid.columns.map((column,c)=>{
+      const widest=Math.max(...grid.rows.map(row=>{
+        const xml=mathOmml(row[c]||'');
+        // Conservative glyph bound, not a change to source math. Fixed shared
+        // columns prevent AUTO width=0 clipping in Word-compatible importers.
+        return [...xml.matchAll(/<m:t[^>]*>(.*?)<\/m:t>/g)].reduce((n,m)=>n+Array.from(m[1].replace(/&[^;]+;/g,'X')).length,0);
+      }));
+      return Math.max(360,widest*220+120)+(c<grid.columns.length-1?(column.gap===undefined?110:spaces[column.gap]??110):0);
+    });
+    const width=widths.reduce((a,b)=>a+b,0);
+    if(width>9300)throw new Error('Ruled array is too wide for the page; split it into smaller standalone blocks');
+    return new Table({layout:TableLayoutType.FIXED,columnWidths:widths,width:{size:width,type:WidthType.DXA},borders:{top:none,bottom:none,left:none,right:none,insideHorizontal:none,insideVertical:none},rows:grid.rows.map((row,r)=>new TableRow({cantSplit:true,children:grid.columns.map((column,c)=>new TableCell({
+      width:{size:widths[c],type:WidthType.DXA},margins:{top:20,bottom:20,left:0,right:c<grid.columns.length-1?(column.gap===undefined?110:spaces[column.gap]??110):0},
+      borders:{left:none,right:none,top:r===0?rule(grid.rules.get(0)):none,bottom:rule(grid.rules.get(r+1))},
+      children:[new Paragraph({alignment:column.align==='left'?AlignmentType.LEFT:column.align==='right'?AlignmentType.RIGHT:AlignmentType.CENTER,spacing:{after:0},children:row[c]?.trim()?safeRichText(`$${row[c]}$`,{color:red?'C00000':'000000',displayMath:false,mathAlignment:column.align},q,`${field} / array ${r+1},${c+1}`):[]})],
+    }))}))});
+  };
   const aligned=(text:string,red:boolean,q:StudioQuestion,field:string)=>{
     let inPart=false;
-    return studioAnswerParagraphs(text).map(line=>{
+    return studioAnswerParagraphs(text).flatMap(line=>{
+      try {
+        const ruled=ruledArrayLine(line.text);
+        if(ruled)return [ruledTable(ruled,red,q,field),new Paragraph({spacing:{line:120,after:80},children:[]})];
+      }catch(error){
+        if(!bestEffort)throw error;
+        addIssue(q,`${field}: ${error instanceof Error?error.message:String(error)}`);
+        return new Paragraph({children:[new TextRun({text:`〔公式待核对：${line.text}〕`,color:'C00000',size:WORD_MATH_STYLE.baseSize})]});
+      }
       const match=line.text.match(/^([（(]\d+[)）])\s*([\s\S]*)$/);
       if(match)inPart=true;
       const display=isStudioDisplayMathLine(match?match[2]:line.text);
@@ -120,7 +161,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
       diagrams.push({token,question:{...q,diagrams:q.diagrams.map((x,i)=>i===index?{...x,shapes:[]}:x)},index});
       children.push(new Paragraph({children:[new TextRun(token)]}));
     });
-    if(mode!=='steps')(q.tables||[]).forEach((table,tableIndex)=>{try{children.push(studioTable(table,q,tableIndex));}catch(error){addIssue(q,`表格${tableIndex+1}：${error instanceof Error?error.message:'表格排版失败'}`);}});
+    if(mode!=='steps')(q.tables||[]).forEach((table,tableIndex)=>{try{children.push(studioTable(table,q,tableIndex));}catch(error){if(!bestEffort)throw new Error(`${q.number} / table ${tableIndex+1}`,{cause:error});addIssue(q,`表格${tableIndex+1}：${error instanceof Error?error.message:'表格排版失败'}`);}});
     if(!withStem)for(const p of q.answerPlacements||[])children.push(new Paragraph({style:'StudioAnswer',spacing:{line:360,after:80},children:p.kind==='choice'?[...safeRichText('（',{color:'C00000'},q,'短答案'),...safeRichText(p.answer,{color:'C00000',italicMath:false,displayMath:false},q,'短答案'),...safeRichText('）',{color:'C00000'},q,'短答案')]:safeRichText(p.answer,{color:'C00000',underline:true,displayMath:false},q,'短答案')}));
     // When the entire recorded solution is exactly the short answer, the
     // placed/underlined answer already contains all its content.
@@ -142,7 +183,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     }
   }
   const font={ascii:"Times New Roman",hAnsi:"Times New Roman",eastAsia:"Songti SC",cs:"Times New Roman"};
-  const document = new Document({styles:{default:{document:{run:{font,size:22},paragraph:{spacing:{line:360}}}},paragraphStyles:[{id:"Title",name:"Title",basedOn:"Normal",run:{color:"000000",size:32,bold:true}},{id:"StudioAnswer",name:"Studio Answer",basedOn:"Normal",run:{color:"C00000",font,size:22}},{id:"StudioMathAnswer",name:"Studio Display Math Answer",basedOn:"StudioAnswer",run:{color:"C00000",font,size:24}},{id:"StudioMathBody",name:"Studio Display Math",basedOn:"Normal",run:{color:"000000",font,size:24}}]},sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:1080,right:1080,bottom:1080,left:1080}}},children}]});
+  const document = new Document({styles:{default:{document:{run:{font,size:22},paragraph:{spacing:{line:360}}}},paragraphStyles:[{id:"Title",name:"Title",basedOn:"Normal",run:{color:"000000",size:32,bold:true}},{id:"StudioAnswer",name:"Studio Answer",basedOn:"Normal",run:{color:"C00000",font,size:22}},{id:"StudioMathAnswer",name:"Studio Display Math Answer",basedOn:"StudioAnswer",run:{color:"C00000",font,size:WORD_MATH_STYLE.baseSize}},{id:"StudioMathBody",name:"Studio Display Math",basedOn:"Normal",run:{color:"000000",font,size:WORD_MATH_STYLE.baseSize}}]},sections:[{properties:{page:{size:{width:11906,height:16838},margin:{top:1080,right:1080,bottom:1080,left:1080}}},children}]});
   const zip = await JSZip.loadAsync(await (await Packer.toBlob(document)).arrayBuffer());
   let xml = await zip.file("word/document.xml")!.async("string");
   let rels = await zip.file("word/_rels/document.xml.rels")!.async("string");
@@ -163,6 +204,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
     if (!pattern.test(xml)) throw new Error("未找到配图导出位置");
     xml=xml.replace(pattern,studioDiagramVml(d,relation,`studio${i}`));
     } catch(error) {
+      if(!bestEffort)throw new Error(`${entry.question.number} / diagram ${entry.index+1}: ${error instanceof Error?error.message:String(error)}`,{cause:error});
       addIssue(entry.question,`配图：${error instanceof Error?error.message:'配图排版失败'}，已跳过损坏图形`);
       const tokenPattern=new RegExp(`<w:p(?:\\s[^>]*)?>(?:(?!<w:p[ >])[\\s\\S])*?${entry.token}(?:(?!<w:p[ >])[\\s\\S])*?</w:p>`);
       xml=xml.replace(tokenPattern,'<w:p/>');
@@ -170,7 +212,7 @@ export async function buildStudioWord(draft: StudioDraft, mode: StudioOutputMode
   }
   // Include the paragraph end-mark properties as well as OMML run properties:
   // equation importers may use the surrounding paragraph's character color.
-  xml=xml.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g,p=>/w:val="Studio(?:Math)?Answer"/.test(p) ? p.replace('</w:pPr>',`<w:rPr><w:color w:val="C00000"/>${p.includes('w:val="StudioMathAnswer"')?'<w:sz w:val="24"/>':''}</w:rPr></w:pPr>`) : p);
+  xml=xml.replace(/<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g,p=>/w:val="Studio(?:Math)?Answer"/.test(p) ? p.replace('</w:pPr>',`<w:rPr><w:color w:val="C00000"/></w:rPr></w:pPr>`) : p);
   zip.file("word/document.xml",enlargeNestedWordMath(xml));
   zip.file("word/_rels/document.xml.rels",rels); zip.file("[Content_Types].xml",contentTypes);
   // Word/WPS can promote a formula-only paragraph to display math. Keep those

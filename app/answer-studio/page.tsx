@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import { fetchMe } from '../../lib/api-client';
 import type { AuthUser } from '../../lib/types';
 import { deduplicateStudioPages, emptyStudioDraft, type StudioDraft, type StudioRecord } from '../../lib/answer-studio';
+import { studioPreparedImages } from '../../lib/answer-studio-prepared-images';
+import { studioSnapshot } from '../../lib/answer-studio-snapshot';
 import { studioStorage } from '../../lib/answer-studio-storage';
 import { cropStudioImage, readStudioFilesInBatches, resizeStudioImage } from '../../lib/answer-studio-images';
 import { recognizeStudioDrawings } from '../../lib/answer-studio-drawings';
@@ -62,7 +64,7 @@ export default function AnswerStudioPage() {
       if(!title.trim())throw new Error('请填写资料名称');
       const resume=!!saved;
       if(!resume&&(!answerFiles.length||(mode==='paired'&&!questionFiles.length)))throw new Error(mode==='paired'?'请上传原件和答案文件':'请上传答案文件');
-      const draft=resume?structuredClone(saved):{...emptyStudioDraft(),title:title.trim(),inputMode:mode};
+      const draft=resume?studioSnapshot(saved):{...emptyStudioDraft(),title:title.trim(),inputMode:mode};
       if(variant){const blocker=studioOutputBlocker(draft,variant);if(blocker)throw new Error(blocker);}
       const checkpoint=async(value:StudioDraft)=>{await studioStorage(user.id,'write',value);setSaved(value);};
       if(!resume){
@@ -74,23 +76,34 @@ export default function AnswerStudioPage() {
         });
       }
       await checkpoint(draft);
+      const preparedImage=studioPreparedImages((page:typeof draft.pages[number])=>resizeStudioImage(page.image));
       const result=await transcribeStudio(draft,{
         progress:setNotice,checkpoint,
         crop:(image,box)=>cropStudioImage(image,box,1200),
-        recognize:async(page,context,requestOptions)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await resizeStudioImage(page.image),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context,concurrent:!!requestOptions?.concurrent})).records,
+        recognize:async(page,context,requestOptions)=>(await api<{records:StudioRecord[]}>('/api/answer-studio/recognize',{image:await preparedImage(page),role:page.role,answerOnly:draft.inputMode==='answers',lesson:draft.title,pageId:page.id,context,concurrent:!!requestOptions?.concurrent})).records,
         drawings:(question,bases,evidence,context)=>recognizeStudioDrawings(question,bases,evidence,body=>api<StudioDrawingResult>('/api/answer-studio/drawings',body),undefined,context),
       },{textConcurrency,drawingConcurrency:2,drawings:variant==='full',includeQuestionFigures:variant==='full'&&studioIncludesQuestionFigures(draft)});
       if(!variant){setNotice(`文字转录完成：${result.questions.length} 题。请选择结果版本；无图版本无需等待配图。`);return;}
       setNotice('正在生成 Word…');
       const {buildStudioWord}=await import('../../lib/answer-studio-export');
       const label=studioOutputs.find(item=>item.value===variant)!.label;
-      const blob=await buildStudioWord(result,variant,{transcription:true,bestEffort:true,includeTranscriptionWarnings});
+      const blob=await buildStudioWord(result,variant,{transcription:true,includeTranscriptionWarnings});
       setDownloads(links.current.offer(blob,`${result.title}_${label}.docx`,'下载 Word'));
       setNotice('');
     }catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'转录失败');}
     finally{
       running.current=false;setBusy(false);
     }
+  }
+  async function downloadReviewCopy(){
+    if(running.current||!saved)return;
+    running.current=true;setBusy(true);setFailed(false);
+    try {
+      const {buildStudioWord}=await import('../../lib/answer-studio-export');
+      const blob=await buildStudioWord(saved,output,{transcription:true,reviewCopy:true,bestEffort:true,includeTranscriptionWarnings:true});
+      setDownloads(links.current.offer(blob,`${saved.title}_REVIEW_ONLY.docx`,'下载校对样张'));
+    } catch(e){setFailed(true);setNotice(e instanceof Error?e.message:'Review export failed');}
+    finally{running.current=false;setBusy(false);}
   }
   if(!loaded)return <main className="answer-studio"><p>正在读取…</p></main>;
   if(!user)return <main className="answer-studio"><h1>手写转录</h1><p>请先登录 Mitty 主站。</p><a href="/">返回主站</a></main>;
@@ -131,6 +144,11 @@ export default function AnswerStudioPage() {
           <input id="studio-include-transcription-warnings" type="checkbox" checked={includeTranscriptionWarnings} disabled={busy} style={{flex:'0 0 auto',width:18,height:18,margin:'3px 0 0'}} onChange={e=>{const checked=e.target.checked;setIncludeTranscriptionWarnings(checked);setDownloads(links.current.invalidate());setNotice(checked?'生成的 Word 将保留转录提示和格式问题。':'生成的 Word 将不附加转录提示或格式问题。');setFailed(false);}}/>
           <span style={{display:'block',minWidth:0}}><span style={{display:'block',fontWeight:600,fontSize:14,lineHeight:1.45}}>在 Word 中加入转录问题提示</span><small style={{display:'block',marginTop:2,lineHeight:1.45}}>显示识别疑点和格式问题；关闭后不附加这些红色提示。</small></span>
         </label>
+        <details><summary>校对与排错</summary>
+          <p>正式 Word 会拦截不支持的公式。校对样张可保留原始公式与问题位置，不可作为正式成品。</p>
+          <button disabled={busy} onClick={()=>void downloadReviewCopy()}>生成校对样张</button>
+          {downloads.filter(file=>file.label==='下载校对样张').map(file=><a key={file.url} href={file.url} download={file.name}>下载校对样张（非正式成品）</a>)}
+        </details>
         {studioOutputBlocker(saved,output)&&<p className="studio-notice" role="status">{studioOutputBlocker(saved,output)}</p>}
         {!downloads.some(file=>file.label==='下载 Word')&&<button className="primary simple-start" disabled={busy||!!studioOutputBlocker(saved,output)} onClick={()=>void start(output)}>{busy?'正在生成…':'生成 Word'}</button>}
         {downloads.filter(file=>file.label==='下载 Word').map(file=><a key={file.url} className="studio-download" href={file.url} download={file.name}>下载{studioOutputs.find(item=>item.value===output)!.label}</a>)}
