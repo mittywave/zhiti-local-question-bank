@@ -1,0 +1,42 @@
+name: Consolidation review
+on:
+  push:
+    branches: [integration/consolidate-mittyhua-fixes-20260926]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: consolidation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Inspect legacy merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch https://github.com/mittyhua/zhiti-local-question-bank.git 727d7ad65cdcd0e8f37bea23d57b92738a815a5e
+          if ! git merge-base --is-ancestor FETCH_HEAD HEAD; then
+            if ! git merge --no-commit --no-ff FETCH_HEAD; then
+              echo '::group::Unresolved integration conflicts'
+              git diff --name-only --diff-filter=U
+              git diff --cc
+              echo '::endgroup::'
+              exit 1
+            fi
+          fi
+          git diff --stat HEAD
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
