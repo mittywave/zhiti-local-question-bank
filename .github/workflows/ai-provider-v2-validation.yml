@@ -1,0 +1,55 @@
+name: AI Provider V2 validation
+on:
+  push:
+    branches: [feature/ai-provider-center-v2]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'app/settings/ai/**'
+      - 'app/api/admin/ai-*/**'
+      - 'lib/ai-*'
+      - 'lib/server/ai*/**'
+      - 'lib/server/ai*.ts'
+      - 'migrations/*ai*'
+      - 'tests/*ai*'
+      - 'scripts/*ai*'
+      - '.github/workflows/ai-provider-v2-validation.yml'
+permissions:
+  contents: read
+concurrency:
+  group: ai-provider-v2-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Temporary bootstrap artifacts allow the offline editor to inspect exactly
+      # the checked-out sources and use lockfile-resolved dependencies. No secrets,
+      # local databases, .git credentials or user configuration are included.
+      - name: Package exact public source
+        run: git archive HEAD | gzip > /tmp/ai-v2-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-v2-source
+          path: /tmp/ai-v2-source.tar.gz
+          retention-days: 2
+      - run: npm ci
+      - name: Package lockfile dependencies for offline validation
+        run: tar -czf /tmp/ai-v2-dependencies.tar.gz node_modules
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-v2-dependencies
+          path: /tmp/ai-v2-dependencies.tar.gz
+          retention-days: 2
+      - run: npm run lint
+      - run: npm run test:studio
+      - run: npm test
+      - run: npm run benchmark:studio
