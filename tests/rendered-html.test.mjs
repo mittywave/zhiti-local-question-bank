@@ -1,3 +1,4 @@
+import { loadSource } from './load-source.mjs';
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -6,9 +7,9 @@ import { isSafeGeoGebraCommand, scoreDiagramVisualFit, validateGeoGebraPlan } fr
 import { combineDiagramRasterFit, scoreProjectionProfiles, shouldAutoVectorizeDiagram, validateVectorDiagramPlan } from "../lib/vector-diagram-reconstruction.mjs";
 import { correctionForCapturedRotation, fitWithinMaxEdge, isPhotographedDiagram, normalizeDiagramRotation } from "../lib/image-processing-rules.mjs";
 import { cleanRecognizedAnalysis, cleanRecognizedAnswer } from "../lib/recognition-cleanup.mjs";
-import { fractionSizeClass, latexFractionDepth, splitMathText, toLatexMath, toReadableNestedFractionLatex } from "../lib/math-text.ts";
+const { fractionSizeClass, latexFractionDepth, splitMathText, toLatexMath, toReadableNestedFractionLatex } = await loadSource("lib/math-text.ts");
 import { needsWordMathEquation, normalizeMathNotation } from "../lib/math-notation.mjs";
-import { orthogonalizeCoordinatePlan, printReadyInkColor, regularizeQuadraticFunctionPlan, svgFromVectorDiagramPlan, vectorDiagramAspectRatio } from "../lib/vector-diagram-renderer.ts";
+const { orthogonalizeCoordinatePlan, printReadyInkColor, regularizeQuadraticFunctionPlan, svgFromVectorDiagramPlan, vectorDiagramAspectRatio } = await loadSource("lib/vector-diagram-renderer.ts");
 import { enlargeNestedWordMath, ensureWordMathSettings, wordMathFractionDepth } from "../lib/word-math-sizing.mjs";
 import { ALEVEL_PAGE_COPY } from "../lib/alevel-page-locale.mjs";
 
@@ -403,30 +404,30 @@ test("does not store AI meta commentary as an answer or analysis", () => {
   assert.equal(cleanRecognizedAnalysis("由勾股定理可得 AB=5。"), "由勾股定理可得 AB=5。");
 });
 
-test("routes every AI feature through the native Antigravity Gemini adapter", async () => {
+test("routes every AI feature through the unified gateway and native Antigravity adapter", async () => {
   const adapter = await readFile(new URL("../lib/server/antigravity-gemini.ts", import.meta.url), "utf8");
+  const gateway = await readFile(new URL("../lib/server/ai-gateway.ts", import.meta.url), "utf8");
   const recognitionModel = await readFile(new URL("../lib/server/recognition-model.ts", import.meta.url), "utf8");
-  assert.match(adapter, /\/antigravity\/v1beta/);
+  assert.match(adapter, /aiProviderModelsUrl/);
   assert.match(adapter, /:generateContent/);
   assert.match(adapter, /responseMimeType:\s*"application\/json"/);
   assert.match(adapter, /thinkingConfig:\s*\{\s*thinkingLevel:\s*thinkingLevel\(reasoningEffort\)\s*\}/);
   assert.match(adapter, /responseSchema:\s*geminiResponseSchema\(schema\)/);
   assert.match(adapter, /nullable:\s*true/);
   assert.match(adapter, /inlineData:\s*\{\s*mimeType:/);
-
+  assert.match(gateway, /callAntigravityGemini/);
+  assert.match(gateway, /resolveAiRuntime/);
   for (const route of ["optimize", "reconstruct-diagram"]) {
     const source = await readFile(new URL(`../app/api/${route}/route.ts`, import.meta.url), "utf8");
-    assert.match(source, /mode === "antigravity_gemini"/);
-    assert.match(source, /callAntigravityGemini/);
-    assert.match(source, /schema, reasoningEffort\(\)\)/);
-    assert.match(source, /gemini-3\.8-flash-high/);
+    assert.match(source, /callStructuredAi/);
+    assert.match(source, /signal: request.signal/);
+    assert.doesNotMatch(source, /process\.env\.OPENAI_API_KEY/);
   }
   for (const route of ["recognize", "recognize-batch"]) {
     const source = await readFile(new URL(`../app/api/${route}/route.ts`, import.meta.url), "utf8");
     assert.match(source, /callRecognitionModel/);
   }
-  assert.match(recognitionModel, /mode === "antigravity_gemini"/);
-  assert.match(recognitionModel, /callAntigravityGemini/);
-  assert.match(recognitionModel, /input\.schema, recognitionReasoningEffort\(\)/);
-  assert.match(recognitionModel, /gemini-3\.8-flash-high/);
+  assert.match(recognitionModel, /callStructuredAi/);
+  assert.match(recognitionModel, /signal: input.signal/);
+  assert.match(recognitionModel, /recognitionReasoningEffort\(\)/);
 });

@@ -1,7 +1,8 @@
+import { loadSource } from './load-source.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseStudioPages,deduplicateStudioPages,matchStudioAnswers,reviseStudioQuestion,assertStudioExportable,validateStudioShapes,validateStudioDraft} from '../lib/answer-studio.ts';
-import {diagramBounds,studioDiagramVml,studioDiagramSvg} from '../lib/answer-studio-diagram.ts';
+const {parseStudioPages,deduplicateStudioPages,matchStudioAnswers,reviseStudioQuestion,assertStudioExportable,validateStudioShapes,validateStudioDraft} = await loadSource("lib/answer-studio.ts");
+const {diagramBounds,studioDiagramVml,studioDiagramSvg} = await loadSource("lib/answer-studio-diagram.ts");
 const record=(id,section='例题精练',extra={})=>({id,lesson:'一',section,number:'1',stem:'已知三角形ABC求外接圆的半径',analysis:'按原文转写',continuation:false,...extra});
 const question=()=>({...record('q'),questionSources:[{pageId:'p',box:{x:0,y:0,width:100,height:100}}],answerIds:['a'],diagrams:[],warnings:[],resolutions:{},reviewed:true});
 test('page ranges are bounded, deduplicated and selected before PDF rendering',()=>{assert.deepEqual(parseStudioPages('1-3,2,5',5),[1,2,3,5]);for(const s of ['0','4-2','6','1,x'])assert.throws(()=>parseStudioPages(s,5));});

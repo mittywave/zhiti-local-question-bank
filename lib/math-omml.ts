@@ -1,16 +1,11 @@
+import { SUPPORTED_MATH_SYMBOLS, MATH_FUNCTIONS, SUPPORTED_MATH_COMMANDS, SUPPORTED_MATH_ENVIRONMENTS, MATH_GRID_DELIMITERS } from './math-capabilities.mjs';
+import { readMathGroup, readMathEnvironment, parseMathGrid, parseArrayColumns } from './math-grid';
 import { normalizeMathNotation } from './math-notation.mjs';
 import { xmlSafeText } from './xml-text';
 
 const escape = (s:string) => s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]!));
-const symbols:Record<string,string> = {
-  times:'×',div:'÷',cdot:'·',pm:'±',mp:'∓',le:'≤',leq:'≤',leqslant:'≤',ge:'≥',geq:'≥',geqslant:'≥',
-  ne:'≠',neq:'≠',approx:'≈',angle:'∠',triangle:'△',pi:'π',Delta:'Δ',delta:'δ',alpha:'α',beta:'β',gamma:'γ',theta:'θ',
-  infty:'∞',therefore:'∴',because:'∵',circ:'°',sim:'∽',backsim:'∽',cong:'≌',perp:'⊥',bot:'⊥',parallel:'∥',
-  cdots:'⋯',ldots:'…',vdots:'⋮',dots:'⋯',quad:'　',qquad:'　　',odot:'⊙',bigodot:'⨀',equiv:'≡',cup:'∪',
-  Leftrightarrow:'⇔',Rightarrow:'⇒',rightarrow:'→',uparrow:'↑',downarrow:'↓',Uparrow:'⇑',Downarrow:'⇓',
-  square:'□',parallelogram:'▱',phi:'ϕ',varphi:'φ',in:'∈',notin:'∉',cap:'∩',to:'→',
-};
-const functions = new Set(['sin','cos','tan','cot','sec','csc','log','ln','exp','min','max']);
+const symbols=SUPPORTED_MATH_SYMBOLS;
+const functions=new Set(MATH_FUNCTIONS);
 const superscripts:Record<string,string> = {'⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9','⁺':'+','⁻':'−'};
 type Style = 'p'|'i'|'b'|'double-struck';
 // Unicode letters retain their double-struck identity in Word importers that
@@ -19,21 +14,18 @@ function doubleStruck(text:string) {
   const exceptions:Record<string,string>={C:'\u2102',H:'\u210D',N:'\u2115',P:'\u2119',Q:'\u211A',R:'\u211D',Z:'\u2124'};
   return Array.from(text,c=>exceptions[c]||(/^[A-Z]$/.test(c)?String.fromCodePoint(0x1D538+c.charCodeAt(0)-65):/^[a-z]$/.test(c)?String.fromCodePoint(0x1D552+c.charCodeAt(0)-97):/^[0-9]$/.test(c)?String.fromCodePoint(0x1D7D8+c.charCodeAt(0)-48):c)).join('');
 }
-const run = (s:string,style?:Style) => `<m:r><m:rPr>${style==='double-struck'?'<m:scr m:val="double-struck"/>':''}<m:sty m:val="${style==='double-struck'?'p':/[0-9]/.test(s)?'p':style??(/^[A-Za-zα-ωΑ-Ω]+$/.test(s)?'i':'p')}"/></m:rPr><m:t xml:space="preserve">${escape(style==='double-struck'?doubleStruck(s):s)}</m:t></m:r>`;
+const run = (s:string,style?:Style) => `<m:r><m:rPr>${/^\s+$/.test(s)?'<m:nor/>':''}${style==='double-struck'?'<m:scr m:val="double-struck"/>':''}<m:sty m:val="${style==='double-struck'?'p':/[0-9]/.test(s)?'p':style??(/^[A-Za-zα-ωΑ-Ω]+$/.test(s)?'i':'p')}"/></m:rPr><m:t xml:space="preserve">${escape(style==='double-struck'?doubleStruck(s):s)}</m:t></m:r>`;
 const wrap = (name:string,inner:string) => `<m:${name}>${inner}</m:${name}>`;
 const delimiter = (body:string,begin:string,end:string) => wrap('d',`<m:dPr><m:begChr m:val="${escape(begin)}"/><m:endChr m:val="${escape(end)}"/></m:dPr>${wrap('e',body)}`);
 
 /** Strict native OMML: unsupported notation fails instead of leaking command names. */
-export function mathOmml(source:string):string {
+function compileMathOmml(source:string):string {
   if(xmlSafeText(source)!==source)throw new Error('公式含异常控制字符，请对照原件校正');
   const text:string=normalizeMathNotation(source).replace(/\*\*/g,'^').replace(/（/g,'(').replace(/）/g,')').replace(/＝/g,'=').replace(/＋/g,'+').replace(/－/g,'−').replace(/＜/g,'<').replace(/＞/g,'>');
-  let i=0;
+  let i=0,parseDepth=0;
   const skip=()=>{while(i<text.length&&/\s/.test(text[i]))i++;};
   function rawGroup():string {
-    skip(); if(text[i++]!=='{')throw new Error('公式缺少分组花括号');
-    const start=i;let depth=1;
-    while(i<text.length){const c=text[i++];if(c==='{')depth++;if(c==='}'&&!--depth)return text.slice(start,i-1);}
-    throw new Error('公式花括号未闭合');
+    skip();const group=readMathGroup(text,i);i=group.end;return group.body;
   }
   function group(style?:Style):string {
     skip();if(i>=text.length)throw new Error('公式缺少分子、分母或上下标');
@@ -43,9 +35,11 @@ export function mathOmml(source:string):string {
   function command(style?:Style):string {
     i++;const name=text.slice(i).match(/^[A-Za-z]+/)?.[0]??text[i]??'';i+=name.length;
     if(!name)throw new Error('公式反斜杠命令缺少名称');
+    if(/^[A-Za-z]+$/.test(name)&&!SUPPORTED_MATH_COMMANDS.has(name))throw new Error(`Unsupported math command \\${name}`);
     if(['left','right'].includes(name)){if(text[i]==='.')i++;return '';}
     if([',',';',':',' ','!'].includes(name))return name==='!'?'':run(' ');
-    if(['{','}','%','#','&','_','$','\\'].includes(name))return run(name,style);
+    if(name==='\\')throw new Error('Row separators are allowed only inside a math grid');
+    if(['{','}','%','#','&','_','$'].includes(name))return run(name,style);
     if(['text','textrm'].includes(name))return run(rawGroup(),'p');
     if(['mathrm','operatorname'].includes(name))return group('p');
     if(name==='mathit')return group('i');
@@ -81,20 +75,22 @@ export function mathOmml(source:string):string {
       const spacing=text.slice(i).match(/^-?\d+(?:\.\d+)?mu/);if(!spacing)throw new Error('公式间距命令无效');i+=spacing[0].length;return '';
     }
     if(name==='begin'){
-      const env=rawGroup();if(env!=='cases'&&env!=='aligned')throw new Error(`公式暂不支持环境 ${env}`);
-      const closing=`\\end{${env}}`;const end=text.indexOf(closing,i);if(end<0)throw new Error('公式方程组或对齐环境未闭合');
-      const body=text.slice(i,end);if(body.includes('\\begin'))throw new Error('暂不支持嵌套方程组');
-      i=end+closing.length;
-      if(env==='aligned') {
-        const rows:string[][]=[];let row:string[]=[],cell='',depth=0;
-        for(let p=0;p<body.length;p++){const c=body[p];if(c==='\\'){if(body[p+1]==='\\'&&depth===0){row.push(cell);rows.push(row);row=[];cell='';p++;continue;}cell+=c;if(p+1<body.length)cell+=body[++p];continue;}if(c==='{')depth++;if(c==='}')depth--;if(c==='&'&&depth===0){row.push(cell);cell='';}else cell+=c;}
-        if(depth||cell.trim()||row.length){row.push(cell);rows.push(row);}if(!rows.length||rows.some(r=>r[0].trim().startsWith('[')))throw new Error('公式对齐环境无效');
-        const columns=Math.max(...rows.map(r=>r.length));const props=Array.from({length:columns},(_,c)=>wrap('mc',wrap('mcPr',`<m:count m:val="1"/><m:mcJc m:val="${c%2?'left':'right'}"/>`))).join('');
-        return wrap('m',wrap('mPr',wrap('mcs',props))+rows.map(r=>wrap('mr',Array.from({length:columns},(_,c)=>wrap('e',mathOmml(r[c]||''))).join(''))).join(''));
-      }
-      const rows=body.split(/\\\\/).map(s=>s.trim()).filter(Boolean);
-      if(!rows.length)throw new Error('公式方程组为空');
-      return delimiter(wrap('eqArr','<m:eqArrPr><m:baseJc m:val="center"/></m:eqArrPr>'+rows.map(s=>wrap('e',mathOmml(s.replace(/&/g,' ')))).join('')),'{','');
+      const env=rawGroup();
+      if(!SUPPORTED_MATH_ENVIRONMENTS.has(env))throw new Error(`Unsupported math environment ${env}`);
+      const columns=env==='array'?parseArrayColumns(rawGroup()):undefined;
+      const region=readMathEnvironment(text,i,env); i=region.end;
+      const grid=parseMathGrid(region.body,env==='array');
+      if(env==='cases')return delimiter(wrap('eqArr','<m:eqArrPr><m:baseJc m:val="center"/></m:eqArrPr>'+grid.rows.map(r=>wrap('e',r.map(c=>mathOmml(c)).join(run(' ')))).join('')),'{','');
+      const count=columns?.length??Math.max(...grid.rows.map(r=>r.length));
+      if(count>32||grid.rows.some(r=>r.length>count))throw new Error('Math grid column count does not match its specification');
+      const props=Array.from({length:count},(_,c)=>wrap('mc',wrap('mcPr',`<m:count m:val="1"/><m:mcJc m:val="${columns?.[c].align??(env==='aligned'?(c%2?'left':'right'):'center')}"/>`))).join('');
+      // Inter-column material belongs to cell width, not source mathematics.
+      const content=grid.rows.map(r=>Array.from({length:count},(_,c)=>mathOmml(r[c]||'')+(c<count-1?run(columns?.[c].gap??'\u2002'):'')));
+      if(grid.rules.size)throw new Error('Ruled array requires a standalone display equation; inline or nested horizontal rules cannot be exported reliably');
+      const rows=content.map(r=>wrap('mr',r.map(c=>wrap('e',c)).join(''))).join('');
+      const body=wrap('m',wrap('mPr','<m:cGpRule m:val="4"/><m:cGp m:val="0"/>'+wrap('mcs',props)+'<m:plcHide m:val="1"/>')+rows);
+      const pair=MATH_GRID_DELIMITERS[env];
+      return pair?delimiter(body,pair[0],pair[1]):body;
     }
     if(functions.has(name))return run(name,'p');
     if(symbols[name])return run(symbols[name],style);
@@ -115,6 +111,8 @@ export function mathOmml(source:string):string {
     i+=character.length;return run(character,style);
   }
   function sequence(end?:string,style?:Style,onClose?:(end:string)=>void):string {
+    if(++parseDepth>64)throw new Error('Math grouping exceeds 64 levels');
+    try {
     const result:string[]=[];
     while(i<text.length){
       const c=text[i];if(end&&end.includes(c)){onClose?.(c);i++;return result.join('');}
@@ -139,6 +137,38 @@ export function mathOmml(source:string):string {
     }
     if(end)throw new Error(`公式 ${end} 未闭合`);
     return result.join('');
+    } finally {parseDepth--;}
   }
   return sequence();
+}
+
+
+// Successful pure compilations only, before color/size/layout. Bound entries
+// AND UTF-16 storage; never cache images, user identifiers or credentials.
+const compiledMath=new Map<string,string>();
+let cacheUnits=0,compileDepth=0;
+export function mathOmml(source:string):string {
+  if(source.length>100_000)throw new Error('Math expression exceeds the 100000-character limit');
+  const hit=compiledMath.get(source);
+  if(hit!==undefined){compiledMath.delete(source);compiledMath.set(source,hit);return hit;}
+  if(compileDepth>=32)throw new Error('Math nesting exceeds the 32-level limit');
+  compileDepth++;
+  try {
+    let xml=compileMathOmml(source);
+    // A relation starting an aligned cell is not a binary expression by itself.
+    // Normal-text math runs retain the visible relation without an importer
+    // inventing a missing left operand (LibreOffice otherwise shows an error).
+    const firstRun=xml.match(/^<m:r>[\s\S]*?<\/m:r>/)?.[0];
+    if(firstRun&&/<m:t[^>]*>(?:=|&lt;|&gt;|[\u2260\u2264\u2265\u2248\u223c\u2261])<\/m:t>/.test(firstRun))
+      xml=xml.replace('<m:rPr>','<m:rPr><m:nor/>');
+    const units=source.length+xml.length;
+    if(units<=256_000){
+      while(compiledMath.size>=256||cacheUnits+units>1_000_000){
+        const key=compiledMath.keys().next().value!;
+        cacheUnits-=key.length+compiledMath.get(key)!.length;compiledMath.delete(key);
+      }
+      compiledMath.set(source,xml);cacheUnits+=units;
+    }
+    return xml;
+  } finally {compileDepth--;}
 }

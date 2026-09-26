@@ -229,7 +229,7 @@ test('Studio auto mode does not turn a 429 into an immediate second-protocol req
   t.after(()=>{if(oldMode===undefined)delete process.env.OPENAI_API_MODE;else process.env.OPENAI_API_MODE=oldMode;});
   process.env.OPENAI_API_MODE='auto';let calls=0;
   t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({error:{message:'limited'}},{status:429,headers:{'retry-after':'9'}});});
-  const {callRecognitionModel}=loader({'./recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}})('lib/server/recognition-model.ts');
+  const {callRecognitionModel}=loader({'./recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}, './ai-provider':{resolveAiRuntime:async()=>({source:'environment',providerName:'test',apiKey:'test-key',baseUrl:'https://test.invalid/v1',model:'test-model',wireApi:process.env.OPENAI_API_MODE})}})('lib/server/recognition-model.ts');
   const result=await callRecognitionModel({apiKey:'test-key',prompt:'test',image:'data:image/png;base64,AA==',schema:{},schemaName:'teacher_answer_transcription'});
   assert.equal(calls,1);assert.equal(result.status,429);assert.equal(result.retryAfter,'9');
 });
@@ -238,7 +238,7 @@ test('Chat Completions non-JSON HTTP errors preserve retry metadata', async t =>
   t.after(()=>{if(oldMode===undefined)delete process.env.OPENAI_API_MODE;else process.env.OPENAI_API_MODE=oldMode;});
   process.env.OPENAI_API_MODE='chat_completions';
   t.mock.method(globalThis,'fetch',async()=>new Response('unavailable',{status:502,headers:{'retry-after':'4'}}));
-  const {callRecognitionModel}=loader({'./recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}})('lib/server/recognition-model.ts');
+  const {callRecognitionModel}=loader({'./recognition-model-rules.mjs':{recognitionReasoningEffort:()=> 'low'}, './ai-provider':{resolveAiRuntime:async()=>({source:'environment',providerName:'test',apiKey:'test-key',baseUrl:'https://test.invalid/v1',model:'test-model',wireApi:process.env.OPENAI_API_MODE})}})('lib/server/recognition-model.ts');
   const result=await callRecognitionModel({apiKey:'test-key',prompt:'test',image:'data:image/png;base64,AA==',schema:{},schemaName:'teacher_answer_transcription'});
   assert.equal(result.status,502);assert.equal(result.retryAfter,'4');
 });
@@ -262,6 +262,8 @@ test('actual Studio routes expose transient HTTP codes, reject malformed output 
     const malformed=await POST(request());assert.equal((await malformed.json()).retryable,false);
     denied=true;assert.equal((await POST(request())).status,403);denied=false;
     delete process.env.OPENAI_API_KEY;
+    // Availability is now decided by the unified runtime, not a route-level environment guard.
+    upstream={status:503,error:'尚未配置智能识别',retryAfter:null,terminal:true};
     const missing=await POST(request());assert.equal(missing.status,503);assert.equal((await missing.json()).retryable,false);process.env.OPENAI_API_KEY='test-key';
   }
 });

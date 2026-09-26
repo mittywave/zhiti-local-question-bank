@@ -21,8 +21,8 @@ test('Word export can include or omit transcription problem hints without changi
     };
     const draft={version:1,title:'提示开关测试',inputMode:'paired',pages:[],questions:[question],answers:[{id:'a'}]};
 
-    const withHints=await JSZip.loadAsync(await (await buildStudioWord(draft,'text',{transcription:true,bestEffort:true,includeTranscriptionWarnings:true})).arrayBuffer());
-    const withoutHints=await JSZip.loadAsync(await (await buildStudioWord(draft,'text',{transcription:true,bestEffort:true,includeTranscriptionWarnings:false})).arrayBuffer());
+    const withHints=await JSZip.loadAsync(await (await buildStudioWord(draft,'text',{transcription:true,bestEffort:true,reviewCopy:true,includeTranscriptionWarnings:true})).arrayBuffer());
+    const withoutHints=await JSZip.loadAsync(await (await buildStudioWord(draft,'text',{transcription:true,bestEffort:true,reviewCopy:true,includeTranscriptionWarnings:false})).arrayBuffer());
     const withXml=await withHints.file('word/document.xml').async('string');
     const withoutXml=await withoutHints.file('word/document.xml').async('string');
 

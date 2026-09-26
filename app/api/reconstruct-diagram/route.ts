@@ -55,6 +55,7 @@ ${correctionContext}
 9. expected_labels 列出题干点名且印刷图中应出现的标签；constraints 用中文记录已核对的数学关系；warnings 记录无法确认的印刷细节。confidence 综合反映识别与复原把握。
 10. 函数图中的每条抛物线或连续曲线必须作为一条 stroke，用 12—40 个按原图印刷轮廓采样的点平滑逼近，不能只给顶点和两个端点形成折角。主轴 id 必须分别命名为 x_axis 和 y_axis，箭头、刻度、虚线对称轴分别输出；题干、选项和学生批注文字不得出现在矢量稿中。`;
     const result = await callStructuredAi({
+      signal: request.signal,
       role: "diagram",
       prompt,
       images: [body.image],
@@ -71,6 +72,8 @@ ${correctionContext}
     if (!validation.ok) return Response.json({ error: validation.error || "AI 返回了无效的矢量重绘方案" }, { status: 422 });
     return Response.json({ result: plan });
   } catch (error) {
+    if (error instanceof Response) return error;
+    if (request.signal.aborted) return Response.json({ error: "请求已取消" }, { status: 499 });
     return Response.json({ error: error instanceof Error ? error.message : "智能重绘失败" }, { status: 500 });
   }
 }

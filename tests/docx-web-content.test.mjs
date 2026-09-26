@@ -1,7 +1,8 @@
+import { loadSource } from './load-source.mjs';
 import assert from "node:assert/strict";
 import test from "node:test";
-import { docxWebContentText, docxWebInlineText, parseDocxWebContent, parseDocxWebOptions } from "../lib/docx-web-content.ts";
-import { plainTextWebLines, toLatexMath } from "../lib/math-text.ts";
+const { docxWebContentText, docxWebInlineText, parseDocxWebContent, parseDocxWebOptions } = await loadSource("lib/docx-web-content.ts");
+const { plainTextWebLines, toLatexMath } = await loadSource("lib/math-text.ts");
 
 const paragraph = (body) => `<w:p xmlns:w="word" xmlns:m="math"><w:pPr><w:jc w:val="left"/></w:pPr>${body}</w:p>`;
 const textRun = (value, properties = "") => `<w:r><w:rPr>${properties}</w:rPr><w:t xml:space="preserve">${value}</w:t></w:r>`;

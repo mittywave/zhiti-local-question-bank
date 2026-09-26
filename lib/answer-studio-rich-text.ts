@@ -7,7 +7,7 @@ import { xmlSafeText } from './xml-text';
 // Match the Normal and StudioAnswer paragraph styles (11 pt).
 const BODY_SIZE=22;
 const BODY_FONT={ascii:'Times New Roman',hAnsi:'Times New Roman',eastAsia:'Songti SC',cs:'Times New Roman',hint:'eastAsia'} as const;
-type RunStyle={bold?:boolean;color?:string;italicMath?:boolean;underline?:boolean;displayMath?:boolean};
+type RunStyle={bold?:boolean;color?:string;italicMath?:boolean;underline?:boolean;displayMath?:boolean;mathAlignment?:'left'|'center'|'right'};
 class NativeMathXml extends ImportedXmlComponent {
   static fromMathXml(xml:string):ParagraphChild {
     // Import the actual OMML element, never the nameless XML container.

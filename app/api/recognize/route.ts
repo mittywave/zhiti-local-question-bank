@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     if (!body.image?.startsWith("data:image/")) return Response.json({ error: "没有收到有效图片" }, { status: 400 });
     if (body.image.length > 20_000_000) return Response.json({ error: "图片过大，请裁剪后重试" }, { status: 413 });
     const categories = body.categories ?? [];
-    const result = await callRecognitionModel({ image: body.image, prompt: buildSingleRecognitionPrompt(categories), schema: singleRecognitionSchema, schemaName: "question_extraction" });
+    const result = await callRecognitionModel({ signal: request.signal, image: body.image, prompt: buildSingleRecognitionPrompt(categories), schema: singleRecognitionSchema, schemaName: "question_extraction" });
     if (!result.text) return Response.json({ error: result.error || "中转站没有返回可用的识别结果，请检查模型是否支持图片" }, { status: result.status >= 400 ? result.status : 502 });
     try { return Response.json({ result: normalizeSingleRecognitionResult(parseRecognitionModelText(result.text), categories) }); }
     catch { return Response.json({ error: "中转站返回的内容不是有效结构化数据，请换用支持 JSON Schema 的模型" }, { status: 502 }); }

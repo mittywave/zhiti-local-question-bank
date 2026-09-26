@@ -1,5 +1,7 @@
+import { mathCapabilityPrompt } from './math-capabilities.mjs';
 /** The same transcription protocol is used by all recognition entry points. */
 export const mathOutputRequirements = [
+  mathCapabilityPrompt,
   "Every mathematical expression must use standard LaTeX with explicit delimiters: $...$ for inline math; $$...$$ for a standalone derivation. Keep prose and source language unchanged outside math.",
   "Use \\frac{...}{...}, \\sqrt{...}, ^{...}, and _{...}. Do not use Unicode superscripts/subscripts or bare LaTeX without delimiters. Preserve every sign, absolute-value bar and grouping from the source.",
   "Use ordinary \\frac rather than \\dfrac or \\tfrac. Do not emit sizing commands such as \\displaystyle, \\textstyle, \\small, \\large or \\Huge: the application controls typography, not the model.",

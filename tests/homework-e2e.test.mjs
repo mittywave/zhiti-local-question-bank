@@ -1,3 +1,4 @@
+import { loopbackFetch as fetch } from './helpers/loopback-fetch.mjs';
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
@@ -401,6 +402,9 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     }
     assert.equal(cleanupStatus, "completed");
     assert.equal((await fetch(`${base}${failing.questionAsset.url}`, { headers: { Cookie: teacherOne } })).status, 404);
+  } catch (error) {
+    console.error(worker.output());
+    throw error;
   } finally {
     await stopWorker(worker); mock.server.closeAllConnections(); await new Promise((resolveClose) => mock.server.close(resolveClose));
   }

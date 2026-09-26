@@ -25,10 +25,10 @@ test('legacy math exports natively without mutating drafts and failures identify
   assert.doesNotMatch(xml,/overgroup|bigodot|angle|<w:drawing|<v:|>\\<\/m:t>/);
   assert.deepEqual(draft,original);
   q.stem='题干 $\\unknown{AB}$';
-  await assert.rejects(()=>buildStudioWord(draft,'text',{transcription:true}),/三角形的外心 · 例题精练 · 第 3 题 · 题干：公式暂不支持 unknown/);
+  await assert.rejects(()=>buildStudioWord(draft,'text',{transcription:true}),/三角形的外心 · 例题精练 · 第 3 题 · 题干：.*unknown/);
   await assert.doesNotReject(()=>buildStudioWord(draft,'steps',{transcription:true}),'unused stem cannot block steps-only output');
   q.answerPlacements[0].answer='$\\unknown{x}$';
-  await assert.rejects(()=>buildStudioWord(draft,'steps',{transcription:true}),/第 3 题 · 短答案：公式暂不支持 unknown/);
+  await assert.rejects(()=>buildStudioWord(draft,'steps',{transcription:true}),/第 3 题 · 短答案：.*unknown/);
 });
 test('warning evidence containing undelimited LaTeX stays literal and cannot block full export',async t=>{
   const {buildStudioWord}=await modules(t);
@@ -67,9 +67,9 @@ test('best-effort full export annotates unsupported formulas instead of aborting
   const {buildStudioWord}=await modules(t);
   const q={...record('q','p'),answerOnly:true,stem:'原题',analysis:'过程 $\\unknown{x}$',answerIds:[],questionSources:[],diagrams:[],tables:[],warnings:[],resolutions:{},drawingsChecked:true,drawingDisposition:'none',drawingsIncludeQuestionFigures:false};
   const draft={version:1,inputMode:'answers',title:'格式问题不中止',questions:[q],answers:[],pages:[]};
-  const zip=await JSZip.loadAsync(await(await buildStudioWord(draft,'full',{transcription:true,bestEffort:true})).arrayBuffer());
+  const zip=await JSZip.loadAsync(await(await buildStudioWord(draft,'full',{transcription:true,bestEffort:true,reviewCopy:true})).arrayBuffer());
   const xml=await zip.file('word/document.xml').async('string');
-  assert.match(xml,/格式问题/);assert.match(xml,/公式暂不支持 unknown/);assert.match(xml,/过程/);
+  assert.match(xml,/格式问题/);assert.match(xml,/Unsupported math command.*unknown/);assert.match(xml,/过程/);
 });
 test('input evidence is independent of output; text stage makes zero crop/drawing calls and full resumes',async t=>{
   const {transcribeStudio,buildStudioWord,studioOutputBlocker}=await modules(t);
@@ -122,7 +122,7 @@ test('missing stems block only stem outputs; existing figures and captions never
   const draft={version:1,inputMode:'answers',title:'回归',pages:[],questions:[q],answers:[answer]};
   assert.equal(studioIssueCount(draft),1);
   assert.equal(studioOutputBlocker(draft,'full'),'');assert.equal(studioOutputBlocker(draft,'text'),'');assert.equal(studioOutputBlocker(draft,'steps'),'');
-  for(const mode of ['full','text'])await buildStudioWord(draft,mode,{transcription:true,bestEffort:true});
+  for(const mode of ['full','text'])await buildStudioWord(draft,mode,{transcription:true,bestEffort:true,reviewCopy:true});
   for(const mode of ['steps','text']){
     if(mode==='text')q.stem='有原题内容';
     const xml=await(await JSZip.loadAsync(await(await buildStudioWord(draft,mode,{transcription:true})).arrayBuffer())).file('word/document.xml').async('string');

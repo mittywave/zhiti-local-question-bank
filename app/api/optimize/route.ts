@@ -64,6 +64,7 @@ export async function POST(request: Request) {
 标签：${JSON.stringify(body.tags ?? [])}
 配图数量：${images.length}`;
     const result = await callStructuredAi({
+      signal: request.signal,
       role: "text",
       prompt,
       images,
@@ -76,6 +77,8 @@ export async function POST(request: Request) {
     try { return Response.json({ result: parseResult(result.text) }); }
     catch { return Response.json({ error: "中转站返回的内容不是有效结构化数据" }, { status: 502 }); }
   } catch (error) {
+    if (error instanceof Response) return error;
+    if (request.signal.aborted) return Response.json({ error: "请求已取消" }, { status: 499 });
     return Response.json({ error: error instanceof Error ? error.message : "优化失败，请稍后重试" }, { status: 500 });
   }
 }

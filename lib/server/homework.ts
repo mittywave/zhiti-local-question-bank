@@ -705,8 +705,7 @@ const ANSWER_RECOVERY_BATCH_SIZE = 4;
 async function recoverAssignmentAnswers(input: {
   extracted: ExtractedAssignmentQuestion[];
   answerImages: string[];
-  apiKey: string;
-  callModel: (modelInput: { apiKey: string; images: string[]; prompt: string; schema: Record<string, unknown>; schemaName: string }) => Promise<{ text?: string; status: number; error?: string }>;
+  callModel: (modelInput: { images: string[]; prompt: string; schema: Record<string, unknown>; schemaName: string }) => Promise<{ text?: string; status: number; error?: string }>;
   parseModelText: (value: string) => unknown;
 }) {
   let merged = input.extracted;
@@ -715,7 +714,6 @@ async function recoverAssignmentAnswers(input: {
 
   async function recoverBatch(pageStart: number, pageEnd: number, questions: ExtractedAssignmentQuestion[]) {
     const result = await input.callModel({
-      apiKey: input.apiKey,
       images: input.answerImages.slice(pageStart, pageEnd),
       prompt: buildAssignmentAnswerRecoveryPrompt(questions, pageStart, pageEnd),
       schema: assignmentAnswerRecoverySchema,
@@ -752,13 +750,11 @@ export async function extractAssignmentTemplate(id: string, user: AuthUser) {
   const answerAssets = assignment.assets.filter((asset) => asset.role === "answer").sort((a, b) => a.pageOrder - b.pageOrder);
   if (!questionAssets.length || !answerAssets.length) throw responseError("请先上传空白题目卷和答案解析", 400);
   if (questionAssets.length + answerAssets.length > 30) throw responseError("题目卷和答案解析合计不能超过 30 页", 400);
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw responseError("尚未配置智能识别 API", 503);
   const { assignmentExtractionSchema, buildAssignmentExtractionPrompt, normalizeAssignmentExtraction } = await import("../homework-grading-contract");
   const { callHomeworkModel, parseHomeworkModelText } = await import("./homework-model");
   const { homeworkAssetDataUrl } = await import("./homework-assets");
   const images = await Promise.all([...questionAssets, ...answerAssets].map((asset) => homeworkAssetDataUrl(asset.id)));
-  const result = await callHomeworkModel({ apiKey, images, prompt: buildAssignmentExtractionPrompt(questionAssets.length, answerAssets.length),
+  const result = await callHomeworkModel({ images, prompt: buildAssignmentExtractionPrompt(questionAssets.length, answerAssets.length),
     schema: assignmentExtractionSchema, schemaName: "homework_assignment_extraction" });
   if (!result.text) throw responseError(result.error || "模板识别没有返回可用结果", result.status >= 400 ? result.status : 502);
   let extracted = normalizeAssignmentExtraction(parseHomeworkModelText(result.text));
@@ -767,7 +763,6 @@ export async function extractAssignmentTemplate(id: string, user: AuthUser) {
     extracted = await recoverAssignmentAnswers({
       extracted,
       answerImages: images.slice(questionAssets.length),
-      apiKey,
       callModel: callHomeworkModel,
       parseModelText: parseHomeworkModelText,
     });

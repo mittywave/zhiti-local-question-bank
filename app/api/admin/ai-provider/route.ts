@@ -1,5 +1,5 @@
 import { requireSameOrigin, requireUser } from "../../../../lib/server/auth";
-import { environmentAiFallbackSummary, getAiProviderConfig, saveAiProviderConfig } from "../../../../lib/server/ai-provider";
+import { AiProviderInputError, aiProviderEncryptionReady, environmentAiFallbackSummary, getAiProviderConfig, saveAiProviderConfig } from "../../../../lib/server/ai-provider";
 import { normalizeAiProviderWireApi } from "../../../../lib/ai-provider-rules.mjs";
 
 async function requireAdmin(request: Request) {
@@ -13,13 +13,14 @@ async function requireAdmin(request: Request) {
 
 function caught(error: unknown) {
   if (error instanceof Response) return error;
+  if (error instanceof AiProviderInputError || error instanceof SyntaxError) return Response.json({ error: error.message }, { status: 400 });
   return Response.json({ error: error instanceof Error ? error.message : "AI Provider 操作失败" }, { status: 500 });
 }
 
 export async function GET(request: Request) {
   try {
     await requireAdmin(request);
-    return Response.json({ config: await getAiProviderConfig(), environmentFallback: environmentAiFallbackSummary() });
+    return Response.json({ config: await getAiProviderConfig(), environmentFallback: environmentAiFallbackSummary(), encryptionReady: aiProviderEncryptionReady() });
   } catch (error) {
     return caught(error);
   }
@@ -30,6 +31,7 @@ export async function PUT(request: Request) {
     requireSameOrigin(request);
     await requireAdmin(request);
     const body = await request.json() as Record<string, unknown>;
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new AiProviderInputError("配置必须是 JSON 对象");
     const modelCatalog = Array.isArray(body.modelCatalog)
       ? body.modelCatalog.map((item) => {
           if (typeof item === "string") return { id: item };

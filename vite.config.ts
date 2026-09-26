@@ -5,36 +5,10 @@ import hostingConfig from "./.openai/hosting.json";
 import { cdnAdapter } from "@vinext/cloudflare/cache/cdn-adapter";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import { preparePdfWorker } from "./scripts/prepare-pdf-worker.mjs";
-
-const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
-  "00000000-0000-4000-8000-000000000000";
-
-const { d1, r2 } = hostingConfig;
+import { ensureLocalBindings } from "./scripts/local-binding-config.mjs";
 
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
-
-const localBindingConfig = {
-  main: "./worker/index.ts",
-  compatibility_flags: ["nodejs_compat"],
-  d1_databases: d1
-    ? [
-        {
-          binding: d1,
-          database_name: "site-creator-d1",
-          database_id: SITE_CREATOR_PLACEHOLDER_DATABASE_ID,
-        },
-      ]
-    : [],
-  r2_buckets: r2
-    ? [
-        {
-          binding: r2,
-          bucket_name: "site-creator-r2",
-        },
-      ]
-    : [],
-};
 
 export default defineConfig(async () => {
   await preparePdfWorker();
@@ -56,7 +30,7 @@ export default defineConfig(async () => {
       cloudflare({
         ...(process.env.STUDIO_TEST_STATE ? { persistState: { path: process.env.STUDIO_TEST_STATE }, remoteBindings: false } : {}),
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
-        config: localBindingConfig,
+        config(config) { ensureLocalBindings(config, hostingConfig); },
       }),
     ],
   };

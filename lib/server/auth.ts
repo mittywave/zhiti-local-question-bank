@@ -88,14 +88,18 @@ function cookieValue(request: Request, name: string) {
 }
 
 export function isLocalRequest(request: Request) {
+  // Production never grants automatic administrator access, even when the
+  // request URL, Host or forwarding headers contain a loopback address.
+  if (appEnv().LOCAL_ADMIN_MODE !== "true") return false;
   const localHost = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname.endsWith(".localhost");
-  const urlHostname = new URL(request.url).hostname.toLowerCase();
-  const forwardedHost = request.headers.get("X-Forwarded-Host")?.split(",", 1)[0].trim() ?? "";
-  const rawHost = (forwardedHost || request.headers.get("Host") || "").toLowerCase();
-  const requestHost = rawHost.startsWith("[") ? rawHost.slice(1, rawHost.indexOf("]")) : rawHost.split(":", 1)[0];
-  const connectingIp = request.headers.get("CF-Connecting-IP")?.trim().toLowerCase() ?? "";
-  const explicitlyLocal = appEnv().LOCAL_ADMIN_MODE === "true" && (connectingIp === "127.0.0.1" || connectingIp === "::1");
-  return explicitlyLocal || localHost(urlHostname) || localHost(requestHost);
+  const url = new URL(request.url);
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!localHost(hostname)) return false;
+  // A reverse-proxy header is never authority to grant a role. When Host is
+  // present it must agree with the actual request URL, not replace it.
+  const host = request.headers.get("Host");
+  if (host && host.toLowerCase() !== url.host.toLowerCase()) return false;
+  return true;
 }
 
 async function ensureLocalAdmin() {

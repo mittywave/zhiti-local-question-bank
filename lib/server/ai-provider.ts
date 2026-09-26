@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import {
   aiProviderModelsUrl,
+  canReuseAiProviderKey,
   normalizeAiProviderApiBase,
   normalizeAiProviderWireApi,
   parseAiProviderModelCatalog,
@@ -9,6 +10,10 @@ import {
   type AiProviderRole,
   type AiProviderWireApi,
 } from "../ai-provider-rules.mjs";
+
+import { aiFetch, aiTimeoutMs, readAiBody, withAiDeadline } from "./ai-http";
+
+export class AiProviderInputError extends Error {}
 
 type ProviderEnv = {
   DB: D1Database;
@@ -156,12 +161,14 @@ function rowToPublic(row: ProviderRow): AiProviderPublicConfig {
 }
 
 function validateRemoteBaseUrl(baseUrl: string) {
-  const normalized = normalizeAiProviderApiBase(baseUrl);
+  let normalized: string;
+  try { normalized = normalizeAiProviderApiBase(baseUrl); }
+  catch { throw new AiProviderInputError("请输入有效的 HTTP(S) Base URL，且不能包含用户名或密码"); }
   const url = new URL(normalized);
   if (url.protocol === "http:" && providerEnv().LOCAL_ADMIN_MODE !== "true") {
-    throw new Error("线上 AI Provider 必须使用 HTTPS Base URL");
+    throw new AiProviderInputError("线上 AI Provider 必须使用 HTTPS Base URL");
   }
-  return baseUrl.trim();
+  return normalized;
 }
 
 function cleanModelCatalog(input: AiProviderModel[] | undefined) {
@@ -188,10 +195,16 @@ export async function saveAiProviderConfig(input: AiProviderSaveInput) {
   const baseUrl = validateRemoteBaseUrl(input.baseUrl);
   const wireApi = normalizeAiProviderWireApi(input.wireApi);
   const modelCatalog = cleanModelCatalog(input.modelCatalog);
+  if (input.enabled && !selectAiProviderRoleModel(input, "recognition")) {
+    throw new AiProviderInputError("启用 Provider 时必须至少选择一个任务模型");
+  }
   let encryptedKey = existing?.api_key_encrypted ?? "";
   const suppliedKey = input.apiKey?.trim() ?? "";
+  if (!suppliedKey && existing?.api_key_encrypted && !canReuseAiProviderKey(existing.base_url, baseUrl)) {
+    throw new AiProviderInputError("Base URL 已变化，请重新输入该 Provider 的 API Key；不会复用旧地址的密钥");
+  }
   if (suppliedKey) encryptedKey = await encryptApiKey(suppliedKey);
-  if (!encryptedKey) throw new Error("请填写 API Key");
+  if (!encryptedKey) throw new AiProviderInputError("请填写 API Key");
   const now = Date.now();
   await providerEnv().DB.prepare(`
     INSERT INTO ai_provider_config
@@ -250,14 +263,15 @@ function legacyRuntime(role: AiProviderRole): AiRuntime | null {
 
 export async function resolveAiRuntime(role: AiProviderRole): Promise<AiRuntime | null> {
   const row = await providerRow();
-  if (row?.enabled && row.api_key_encrypted) {
+  if (row?.enabled) {
     const config = rowToPublic(row);
     const model = selectAiProviderRoleModel(config, role);
+    if (!model || !row.api_key_encrypted) throw new Error("已启用的 AI Provider 缺少模型或密钥，请在 AI 设置中修正或停用；未切换到其他供应商");
     if (model) {
       return {
         source: "database",
         providerName: config.name,
-        baseUrl: config.baseUrl,
+        baseUrl: validateRemoteBaseUrl(config.baseUrl),
         apiKey: await decryptApiKey(row.api_key_encrypted),
         wireApi: config.wireApi,
         model,
@@ -278,27 +292,46 @@ export function environmentAiFallbackSummary() {
   };
 }
 
-export async function discoverAiProviderModels(input: { baseUrl?: string; apiKey?: string }) {
+export function aiProviderEncryptionReady() {
+  const bindings = providerEnv();
+  return bindings.LOCAL_ADMIN_MODE === "true" || Boolean((bindings.AI_PROVIDER_ENCRYPTION_KEY || process.env.AI_PROVIDER_ENCRYPTION_KEY || "").trim());
+}
+
+export async function discoverAiProviderModels(input: { baseUrl?: string; apiKey?: string; wireApi?: string; signal?: AbortSignal }) {
+  input.signal?.throwIfAborted();
   const stored = await providerRow();
   const baseUrl = validateRemoteBaseUrl(input.baseUrl?.trim() || stored?.base_url || "");
   const suppliedKey = input.apiKey?.trim() ?? "";
-  const apiKey = suppliedKey || (stored?.api_key_encrypted ? await decryptApiKey(stored.api_key_encrypted) : "");
-  if (!apiKey) throw new Error("请先填写或保存 API Key");
-  const startedAt = Date.now();
-  const response = await fetch(aiProviderModelsUrl(baseUrl), {
-    headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
-  });
-  const text = await response.text();
-  let payload: unknown = {};
-  try { payload = JSON.parse(text); }
-  catch { throw new Error(`上游 /models 返回了非 JSON 响应（HTTP ${response.status}）`); }
-  if (!response.ok) {
-    const message = typeof (payload as { error?: { message?: unknown } })?.error?.message === "string"
-      ? (payload as { error: { message: string } }).error.message
-      : `获取模型失败（HTTP ${response.status}）`;
-    throw new Error(message);
+  if (!suppliedKey && stored?.api_key_encrypted && !canReuseAiProviderKey(stored.base_url, baseUrl)) {
+    throw new AiProviderInputError("Base URL 已变化，请重新输入该 Provider 的 API Key；不会向新地址发送旧密钥");
   }
-  const models = parseAiProviderModelCatalog(payload);
-  if (!models.length) throw new Error("上游 /models 没有返回可用模型");
-  return { models, latencyMs: Date.now() - startedAt };
+  const apiKey = suppliedKey || (stored?.api_key_encrypted ? await decryptApiKey(stored.api_key_encrypted) : "");
+  if (!apiKey) throw new AiProviderInputError("请先填写或保存 API Key");
+  const wireApi = normalizeAiProviderWireApi(input.wireApi ?? stored?.wire_api);
+  const startedAt = Date.now();
+  try {
+    return await withAiDeadline(async signal => {
+      const response = await aiFetch(aiProviderModelsUrl(baseUrl, wireApi), {
+        signal,
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      });
+      const text = await readAiBody(response, 2_000_000);
+      let payload: unknown = {};
+      try { payload = JSON.parse(text); }
+      catch { throw new Error(`上游模型目录返回了非 JSON 响应（HTTP ${response.status}）；可手动添加模型 ID`); }
+      if (!response.ok) {
+        const message = typeof (payload as { error?: { message?: unknown } })?.error?.message === "string"
+          ? (payload as { error: { message: string } }).error.message
+          : `获取模型失败（HTTP ${response.status}）`;
+        throw new Error(`${message}；上游不提供模型目录时可手动添加模型 ID`);
+      }
+      const models = parseAiProviderModelCatalog(payload);
+      if (!models.length) throw new Error("上游没有返回可用模型；可手动添加模型 ID");
+      return { models, latencyMs: Date.now() - startedAt };
+    }, aiTimeoutMs(process.env.AI_MODELS_TIMEOUT_MS, 15_000), input.signal);
+  } catch (error) {
+    if (input.signal?.aborted) throw input.signal.reason;
+    if (error instanceof Error && error.message.includes(apiKey)) throw new Error(error.message.split(apiKey).join("[redacted]"));
+    throw error;
+  }
 }
