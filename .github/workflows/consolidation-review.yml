@@ -1,42 +1,10 @@
 name: Consolidation review
 on:
-  push:
-    branches: [integration/consolidate-mittyhua-fixes-20260926]
   workflow_dispatch:
 permissions:
   contents: read
-concurrency:
-  group: consolidation-${{ github.ref }}
-  cancel-in-progress: true
 jobs:
-  prepare:
+  staged:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Fetch pinned legacy history
-        run: |
-          git fetch https://github.com/mittyhua/zhiti-local-question-bank.git 727d7ad65cdcd0e8f37bea23d57b92738a815a5e
-          git update-ref refs/remotes/legacy/main FETCH_HEAD
-          git archive HEAD | tar -x -C "$RUNNER_TEMP"
-          tar -czf "$RUNNER_TEMP/zhiti-source.tar.gz" --exclude=node_modules --exclude=.wrangler --exclude=dist .
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zhiti-integration-source
-          path: ${{ runner.temp }}/zhiti-source.tar.gz
-          retention-days: 3
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - name: Package test dependencies
-        run: tar -czf "$RUNNER_TEMP/zhiti-node-modules.tar.gz" node_modules
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zhiti-integration-dependencies
-          path: ${{ runner.temp }}/zhiti-node-modules.tar.gz
-          retention-days: 3
+      - run: echo 'Preparing the reviewed integration; no deployment or main-branch changes.'
