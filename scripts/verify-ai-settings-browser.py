@@ -120,7 +120,7 @@ class App:
         self.env={k:v for k,v in os.environ.items() if not (k.startswith(('OPENAI_','AI_PROVIDER_','CLOUDFLARE_','DEEPSEEK_')))}
         self.env.update(NO_COLOR='1',WRANGLER_SEND_METRICS='false')
         self.sql('\n'.join(p.read_text() for p in sorted((ROOT/'migrations').glob('*.sql'))))
-        vars={'LOCAL_ADMIN_MODE':'false','AI_PROVIDER_LOCAL_HTTP':'true','AI_PROVIDER_ALLOWED_BASES':self.upstream,'AI_PROVIDER_ENCRYPTION_KEY':SECRET,'ADMIN_EMAIL':ADMIN,'REGISTRATION_INVITE_CODE':INVITE,'OPENAI_API_KEY':'','HOMEWORK_AUTO_PUBLISH_ENABLED':'false'}
+        vars={'LOCAL_ADMIN_MODE':'false','AI_PROVIDER_LOCAL_HTTP':'true','AI_PROVIDER_ENCRYPTION_KEY':SECRET,'ADMIN_EMAIL':ADMIN,'REGISTRATION_INVITE_CODE':INVITE,'OPENAI_API_KEY':'','HOMEWORK_AUTO_PUBLISH_ENABLED':'false'}
         args=[WRANGLER,'dev','--config',str(ROOT/'dist/server/wrangler.json'),'--port',self.base.rsplit(':',1)[-1],'--ip','127.0.0.1','--persist-to',self.state]
         for k,v in vars.items():args+=['--var',f'{k}:{v}']
         self.log=open(self.out/'worker.log','w');self.child=subprocess.Popen(args,cwd=ROOT,env=self.env,stdout=self.log,stderr=subprocess.STDOUT,start_new_session=True)
