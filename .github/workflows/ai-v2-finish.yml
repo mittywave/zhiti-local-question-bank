@@ -16,7 +16,7 @@ jobs:
     permissions:
       contents: write
     env:
-      EXPECTED_TREE: 8910f4d5568d882d1a1a24c5ef2109d64dc85dfe
+      EXPECTED_TREE: aba96a571eaf48b4129ef3de3156a3f07843a58f
       WRANGLER_SEND_METRICS: 'false'
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Apply exact reviewed patch and verify entire source tree
+      - name: Apply exact reviewed patches and verify entire source tree
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -65,19 +65,23 @@ jobs:
           99f171b470f9bc402eb6e8144545fcbeff4c9b63
           37ebfc143dea6a19a3f4a69673d00863b34655b5
           a1bb139f25e67fc3c9ba8ca4e9d35688434db377'''.split()
-          pieces = []
-          for sha in chunks:
+          def blob(sha):
               req = urllib.request.Request(f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/blobs/{sha}', headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
               with urllib.request.urlopen(req, timeout=30) as response:
                   data = base64.b64decode(json.load(response)['content'])
               assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == sha
-              pieces.append(data)
-          patch = gzip.decompress(base64.b64decode(b''.join(pieces)))
+              return data
+          patch = gzip.decompress(base64.b64decode(b''.join(blob(sha) for sha in chunks)))
           assert hashlib.sha256(patch).hexdigest() == '65186281c94914357ba07ce1b5f8a79099634dcfab1f9f2e2e168184bc84e48a'
           pathlib.Path('finish-evidence/reviewed.patch').write_bytes(patch)
+          runtime = blob('b1f0ac0f3a5d784b71d4e1fda0a8799a351e6b37')
+          assert hashlib.sha256(runtime).hexdigest() == '7675768485feba3af9d704d02fab5f2ed93700423a8727930123e502c07cdf82'
+          pathlib.Path('finish-evidence/direct-runtime.patch').write_bytes(runtime)
           PY
           git apply --index --check finish-evidence/reviewed.patch
           git apply --index finish-evidence/reviewed.patch
+          git apply --index --check finish-evidence/direct-runtime.patch
+          git apply --index finish-evidence/direct-runtime.patch
           git rm -- .github/workflows/ai-v2-workspace.yml .github/workflows/ai-v2-finish.yml
           git diff --cached --check -- . ':(exclude)docs/ai-provider-center-v2-taskbook.md'
           test "$(git write-tree)" = "$EXPECTED_TREE"
