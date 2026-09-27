@@ -40,10 +40,15 @@ export function parseCatalog(payload: unknown, fingerprint: string): ProviderMod
         return [{ id, displayName: name.slice(0, 200), capabilities, metadata: { inputModalities, outputModalities, effortLevels: strings(effort.supported_levels), defaultEffort: typeof effort.default_level === 'string' ? effort.default_level.slice(0, 100) : undefined, apiCapabilities: safeApi }, catalogPresent: true, manual: false, legacyCompatible: false, updatedAt: now }];
     });
 }
-export function mergeCatalog(existing: ProviderModel[], discovered: ProviderModel[], fingerprint: string) {
-    const models = new Map(existing.map(m => [m.id, { ...m, catalogPresent: false }]));
+export function mergeCatalog(existing: ProviderModel[], discovered: ProviderModel[], fingerprint: string, preserveIds: ReadonlySet<string> = new Set()) {
+    // A catalog refresh represents the latest upstream snapshot. Do not keep every
+    // historical catalog row forever: retain only explicit manual entries and
+    // models still referenced by task/default routing.
+    const models = new Map(existing
+        .filter(m => m.manual || preserveIds.has(m.id))
+        .map(m => [m.id, { ...m, catalogPresent: false }]));
     for (const incoming of discovered) {
-        const model = structuredClone(incoming), old = models.get(model.id);
+        const model = structuredClone(incoming), old = existing.find(item => item.id === model.id);
         if (old) {
             model.manual = old.manual;
             if (old.metadata.reasoningEffort !== undefined) model.metadata.reasoningEffort = old.metadata.reasoningEffort;
