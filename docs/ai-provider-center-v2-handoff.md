@@ -25,3 +25,9 @@
 开发侧外部 AI 均为合成服务；真实 DeepSeek、用户 Sub2API 的版本/分组/模型别名必须私密本地测试，可能计费。不要将 Key 发布到聊天、PR、Issue 或截图。LibreOffice 逐页检查不是 macOS Word/WPS 认证。独立 TypeScript 检查仍有 validation 中披露的 237 项诊断，不是整库类型零错误。
 
 没有合并 main、审批自己的 PR、部署生产或运行远程迁移。验收通过后，由仓库所有者决定后续合并和单独授权的生产步骤。
+
+## 2026-09-27 follow-up: zero-config custom Provider
+
+Owner acceptance feedback changed the custom-provider UX requirement: entering a public HTTPS Base URL and API Key in the AI Provider Center must be sufficient to save, test, and use the provider. The previous `AI_PROVIDER_ALLOWED_BASES` prerequisite was therefore removed from runtime validation and UI guidance.
+
+Production still rejects non-HTTPS endpoints, obvious localhost/private/link-local/cloud-metadata targets, and redirects. Local synthetic browser/E2E fixtures retain an internal loopback-HTTP test switch only. This deliberately improves first-run usability while documenting that URL-string checks do not provide DNS pinning.
