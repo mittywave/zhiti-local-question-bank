@@ -2,7 +2,6 @@ import type { AiTaskRole, ProviderConfig, ProviderDiagnostic, ProviderModel } fr
 import { providerEndpoint } from '../../ai-provider-presets';
 import { aiFetch, AiTimeoutError, aiTimeoutMs, readAiBody, withAiDeadline } from '../ai-http';
 import { matchesAiSchema } from '../ai-schema';
-import { capabilityState } from './capabilities';
 import { setting } from './credentials';
 import { modelReasoningEffort, modelConfigurationFingerprint } from './model-options';
 import { assertTrustedDestination } from './endpoint-policy';
@@ -244,8 +243,9 @@ export async function callV2(input: EngineInput): Promise<EngineResult> {
         return error instanceof ProviderError ? { ...failure(error.code, error.status), error: error.message } : failure('INTERNAL_ERROR', 500);
     }
 }
-/** Probe can establish unknown capability, but cannot ignore known unsupported vision. */
+/** Capability labels are advisory only; probes always exercise the selected model directly. */
 export function checkProbeModel(p: ProviderConfig, model: ProviderModel, images: boolean) {
-    if (images && capabilityState(p, model, 'vision') === 'unsupported')
-        throw new ProviderError('CAPABILITY_MISMATCH', '此模型已明确不支持图片；请先修正能力证据，不会发送图片。', 422);
+    void p;
+    void model;
+    void images;
 }
