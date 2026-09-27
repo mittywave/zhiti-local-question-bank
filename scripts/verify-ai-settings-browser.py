@@ -2,7 +2,7 @@
 Only the external AI HTTP service is synthetic. No production commands or real
 credentials are read. Run `npm run build` first. CI runs Chromium and WebKit.
 """
-import argparse, base64, hashlib, json, os, re, signal, socket, subprocess, tempfile, threading, time, urllib.error, urllib.request, zipfile, struct, zlib
+import argparse, base64, hashlib, json, os, re, signal, socket, sqlite3, subprocess, tempfile, threading, time, urllib.error, urllib.request, zipfile, struct, zlib
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from playwright.sync_api import sync_playwright, expect
@@ -90,6 +90,27 @@ class App:
     def __init__(self,out,upstream):
         self.out=out; self.tmp=tempfile.TemporaryDirectory(prefix='ai-v2-browser-'); self.state=self.tmp.name; self.base=f'http://127.0.0.1:{free_port()}'; self.cookie='';self.upstream=upstream
     def sql(self,sql):
+        # Once the tested Worker owns D1, do not start a second workerd CLI to
+        # inspect or seed it. Use only this isolated fixture's actual SQLite.
+        # Real application migration still happens through the authenticated API.
+        if hasattr(self,'child'):
+            seed=bool(re.match(r'\s*INSERT\s+INTO\s+ai_provider_config\b',sql,re.I))
+            if not seed and not re.match(r'\s*SELECT\b',sql,re.I):
+                raise ValueError('Only legacy seeding and read-only observations are allowed.')
+            paths=[]
+            for path in (Path(self.state)/'v3/d1').rglob('*.sqlite'):
+                with sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=3) as db:
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ai_provider_config'").fetchone():paths.append(path)
+            if len(paths)!=1:raise RuntimeError('Expected exactly one real local AI fixture database.')
+            db=sqlite3.connect(paths[0].resolve().as_uri()+('?mode=rw' if seed else '?mode=ro'),uri=True,timeout=3)
+            try:
+                db.row_factory=sqlite3.Row
+                if not seed:db.execute('PRAGMA query_only=ON')
+                cursor=db.execute(sql)
+                rows=[dict(row) for row in cursor.fetchall()] if cursor.description else []
+                db.commit()
+                return rows
+            finally:db.close()
         f=Path(self.state)/'fixture.sql';f.write_text(sql)
         run=subprocess.run([WRANGLER,'d1','execute','DB','--local','--config',str(ROOT/'wrangler.jsonc'),'--persist-to',self.state,'--file',str(f),'--json'],cwd=ROOT,env=self.env,capture_output=True,text=True,timeout=45)
         assert run.returncode==0,run.stderr[-1000:]
