@@ -78,10 +78,15 @@ test('task routes ignore capability labels, block referenced deletion, and prese
   await assert.rejects(()=>m.repo.saveRouting(next),e=>e.code==='REVISION_CONFLICT');await assert.rejects(()=>m.repo.deleteProvider(p.id,p.revision),e=>e.code==='PROVIDER_IN_USE');
   await assert.rejects(()=>m.repo.saveProvider(p.id,input(m.presets,{...p,enabled:false,expectedRevision:p.revision,credential:{action:'keep'}})),e=>e.code==='PROVIDER_IN_USE');
 });
-test('stale discovery cannot overwrite an edited provider; manual and bound IDs survive refresh',async()=>{
-  const m=await modules(),p=await m.repo.saveProvider(null,input(m.presets)),s=await m.repo.readCenter();
-  await m.repo.saveManualModel(p.id,{id:'Manual',expectedRevision:1,expectedConfigurationRevision:s.routing.revision,capabilities:{text:'supported'}});
-  await m.repo.saveCatalog(p.id,p.fingerprint,[]);assert.equal((await m.repo.readCenter()).providers[0].models[0].id,'Manual');
+test('refresh prunes stale catalog rows, preserves manual and routed IDs, and rejects stale discovery',async()=>{
+  const m=await modules(),p=await m.repo.saveProvider(null,input(m.presets));let s=await m.repo.readCenter();
+  const caps=await loadSource('lib/server/ai/capabilities.ts');
+  await m.repo.saveCatalog(p.id,p.fingerprint,caps.parseCatalog({data:[{id:'Routed'},{id:'Old'}]},p.fingerprint));
+  s=await m.repo.readCenter();await m.repo.saveManualModel(p.id,{id:'Manual',expectedRevision:p.revision,expectedConfigurationRevision:s.routing.revision,capabilities:{text:'supported'}});
+  s=await m.repo.readCenter();const routing=structuredClone(s.routing);routing.routes.find(r=>r.role==='text').primary={providerId:p.id,modelId:'Routed'};await m.repo.saveRouting(routing);
+  s=await m.repo.readCenter();await m.repo.saveCatalog(p.id,p.fingerprint,caps.parseCatalog({data:[{id:'Fresh'}]},p.fingerprint));
+  const ids=(await m.repo.readCenter()).providers[0].models.map(x=>x.id);assert.deepEqual(ids.sort(),['Fresh','Manual','Routed']);assert.equal(ids.includes('Old'),false);
+  const kept=(await m.repo.readCenter()).providers[0].models.find(x=>x.id==='Routed');assert.equal(kept.catalogPresent,false);
   await m.repo.saveProvider(p.id,input(m.presets,{...p,name:'Renamed',expectedRevision:1,credential:{action:'keep'}}));
   await assert.rejects(()=>m.repo.saveCatalog(p.id,p.fingerprint,[]),e=>e.code==='REVISION_CONFLICT');
 });
