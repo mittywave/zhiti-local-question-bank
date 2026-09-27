@@ -113,7 +113,7 @@ Provider revision、全局 configuration revision、带 CHECK 的 write guard �
 
 `npm run dev` 执行本地迁移，不操作远程 D1。建议单独克隆或使用独立工作树/本地数据库备份，避免试验影响日常题库。项目规则以 AGENTS.md 为准。
 
-.env.example 已说明相关服务器配置。自建网关需在私密 `.env.local` 配置 `AI_PROVIDER_ALLOWED_BASES`，值为逗号分隔的可信 HTTPS 地址，尽量限定租户/部署前缀。`npm run dev` 同步这些设置到私密 `.dev.vars`。本地开发默认密钥只用于本地；保留原 `AI_PROVIDER_ENCRYPTION_KEY`，不要为了升级生成新 Secret 导致旧 Key 无法解密。
+自建/第三方网关现在采用零额外配置接入：管理员在 `/settings/ai` 填写公开 HTTPS Base URL 与 API Key 后即可直接保存、探测和用于路由，不再要求 `AI_PROVIDER_ALLOWED_BASES` 或修改 `.env.local`。本地开发默认密钥只用于本地；仍需保留原 `AI_PROVIDER_ENCRYPTION_KEY`，不要为了升级生成新 Secret 导致旧 Key 无法解密。生产侧继续拒绝非 HTTPS、明显的本机/私网/云元数据目标，并拒绝上游重定向。
 
 本地回归：
 
@@ -141,4 +141,4 @@ Provider revision、全局 configuration revision、带 CHECK 的 write guard �
 
 ## 剩余边界
 
-真实 DeepSeek/Sub2API 计费调用和 Word/WPS 实机验收未执行。SSRF 防护依赖可信目的地 allowlist 与禁重定向，不宣称字符串过滤能控制所有 DNS 解析结果；服务端配置者应仅批准可信网关，并可使用受控出站代理。流式上游不会冒充非流式成功。模型简单合成能力测试不代表复杂题库质量。上层作业队列保留独立有界恢复，不能宣称全系统 exactly-once。
+真实 DeepSeek/Sub2API 计费调用和 Word/WPS 实机验收未执行。自定义 Provider 不再依赖目的地 allowlist；生产环境只接受 HTTPS，并拒绝明显的本机、私网、云元数据目标以及上游重定向。该字符串/URL 层防护不等于 DNS 解析后地址固定，不能宣称消除了 DNS rebinding 等所有 SSRF 风险；若未来允许不受信任的管理员配置 Provider，应增加受控出站代理或解析后网络策略。流式上游不会冒充非流式成功。模型简单合成能力测试不代表复杂题库质量。上层作业队列保留独立有界恢复，不能宣称全系统 exactly-once。
