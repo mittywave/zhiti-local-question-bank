@@ -1,3 +1,5 @@
+import { localD1Rows as d1Rows } from './helpers/local-d1-observer.mjs';
+import { loadSource } from "./load-source.mjs";
 import { loopbackFetch as fetch } from './helpers/loopback-fetch.mjs';
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -20,13 +22,6 @@ function command(args) {
   if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
 }
 
-function d1Rows(persistTo, sql) {
-  const result = spawnSync(WRANGLER, ["d1", "execute", "DB", "--local", "--persist-to", persistTo,
-    "--config", join(ROOT, "wrangler.jsonc"), "--command", sql, "--json"],
-  { cwd: ROOT, encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } });
-  if (result.status !== 0) throw new Error(`${result.stdout}\n${result.stderr}`);
-  return JSON.parse(result.stdout)[0]?.results ?? [];
-}
 
 async function freePort() {
   return new Promise((resolvePort, reject) => {
@@ -37,9 +32,8 @@ async function freePort() {
 }
 
 function startWorker(port, persistTo, vars) {
-  const args = ["dev", "--config", CONFIG, "--port", String(port), "--ip", "127.0.0.1", "--persist-to", persistTo];
-  for (const [key, value] of Object.entries(vars)) args.push("--var", `${key}:${value}`);
-  const child = spawn(WRANGLER, args, { cwd: ROOT, env: { ...process.env, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  const args = [join(ROOT, "scripts/start-local-test-worker.mjs"), CONFIG, String(port), persistTo, JSON.stringify(vars)];
+  const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" }, stdio: ["ignore", "pipe", "pipe"] });
   let output = ""; child.stdout.on("data", (chunk) => { output += chunk; }); child.stderr.on("data", (chunk) => { output += chunk; });
   return { child, output: () => output };
 }
@@ -196,7 +190,7 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
   const [port, modelPort] = await Promise.all([freePort(), freePort()]); const stateDir = await mkdtemp(join(tmpdir(), "zhiti-homework-e2e-"));
   command(["d1", "migrations", "apply", "DB", "--local", "--persist-to", stateDir, "--config", join(ROOT, "wrangler.jsonc")]);
   const mock = await startMockModel(modelPort); const worker = startWorker(port, stateDir, {
-    LOCAL_ADMIN_MODE: "false", HOMEWORK_GRADING_ENABLED: "true", REGISTRATION_INVITE_CODE: INVITE, ADMIN_EMAIL: "admin@homework.test",
+    LOCAL_ADMIN_MODE: "false", AI_PROVIDER_LOCAL_HTTP: "true", AI_PROVIDER_ENCRYPTION_KEY: "synthetic-homework-v2-secret", HOMEWORK_GRADING_ENABLED: "true", REGISTRATION_INVITE_CODE: INVITE, ADMIN_EMAIL: "admin@homework.test",
     OPENAI_API_KEY: "mock-key", OPENAI_BASE_URL: `http://127.0.0.1:${modelPort}/v1`, OPENAI_API_MODE: "responses",
     HOMEWORK_GRADING_MODEL: "mock-homework", HOMEWORK_QUEUE_RETRY_BASE_SECONDS: "1", HOMEWORK_QUEUE_MAX_ATTEMPTS: "4", HOMEWORK_AUTO_PUBLISH_ENABLED: "true",
     STUDENT_PORTAL_ORIGIN: "http://192.168.50.10:3001",
@@ -208,6 +202,26 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     const teacherTwoRegistration = await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email: "two@homework.test", password: "password123", inviteCode: INVITE } });
     assert.equal(teacherOneRegistration.response.status, 201); assert.equal(teacherTwoRegistration.response.status, 201);
     const teacherOne = sessionCookie(teacherOneRegistration.response); const teacherTwo = sessionCookie(teacherTwoRegistration.response);
+    // Exercise the real V2 grading route through D1 and the homework queue.
+    // Other roles retain the explicit read-only environment fallback in this suite.
+    const adminRegistration = await jsonRequest(base, "/api/auth/register", { method: "POST", body: { email: "admin@homework.test", password: "password123", inviteCode: INVITE } });
+    assert.equal(adminRegistration.response.status, 201);
+    const adminCookie = sessionCookie(adminRegistration.response);
+    const { newProvider } = await loadSource("lib/ai-provider-presets.ts");
+    const providerResponse = await jsonRequest(base, "/api/admin/ai-providers", { cookie: adminCookie, method: "POST", body: {
+      ...newProvider(), name: "Homework V2 fixture", baseUrl: `http://127.0.0.1:${modelPort}/v1`, wireApi: "responses", enabled: true, credential: { action: "replace", value: "mock-key" },
+    } });
+    assert.equal(providerResponse.response.status, 200); const gradingProvider = providerResponse.payload.provider;
+    let center = (await jsonRequest(base, "/api/admin/ai-providers", { cookie: adminCookie })).payload;
+    const modelResponse = await jsonRequest(base, `/api/admin/ai-providers/${gradingProvider.id}/models`, { cookie: adminCookie, method: "POST", body: {
+      id: "mock-homework", expectedRevision: gradingProvider.revision, expectedConfigurationRevision: center.routing.revision,
+      capabilities: { text: "supported", vision: "supported", structured: "supported" },
+    } });
+    assert.equal(modelResponse.response.status, 200);
+    center = (await jsonRequest(base, "/api/admin/ai-providers", { cookie: adminCookie })).payload;
+    center.routing.routes.find(route => route.role === "grading").primary = { providerId: gradingProvider.id, modelId: "mock-homework" };
+    assert.equal((await jsonRequest(base, "/api/admin/ai-routing", { cookie: adminCookie, method: "PUT", body: center.routing })).response.status, 200);
+
 
     const emptyDraft = await jsonRequest(base, "/api/assignments", { cookie: teacherOne, method: "POST", body: { assignment: { title: "先保存设置的草稿" } } });
     assert.equal(emptyDraft.response.status, 201);
@@ -387,7 +401,9 @@ test("homework flow auto-publishes readable work, auto-returns unreadable work, 
     const failedId = failedDraft.payload.submission.id; await uploadSubmissionPage(base, studentOneCookie, failedId, bytes, "失败重试");
     await jsonRequest(base, `/api/student/submissions/${failedId}`, { cookie: studentOneCookie, method: "PUT", body: { action: "submit" } });
     const failed = await waitForSubmission(base, teacherOne, failedId, ["failed"], worker, 30_000);
-    assert.match(failed.failureReason, /mock grading unavailable/); assert.ok(mock.state.failureCalls >= 4);
+    assert.match(failed.failureReason, /上游服务失败/); assert.doesNotMatch(failed.failureReason, /mock grading unavailable/); assert.ok(mock.state.failureCalls >= 4);
+    const diagnosticRows = d1Rows(stateDir, `SELECT role,model_id,MAX(upper_attempt) AS attempts FROM ai_provider_diagnostics WHERE provider_id='${gradingProvider.id}' AND kind='task' AND code='UPSTREAM_FAILED'`);
+    assert.equal(diagnosticRows[0].role, "grading"); assert.equal(diagnosticRows[0].model_id, "mock-homework"); assert.equal(diagnosticRows[0].attempts, 4);
     const studentFailure = await jsonRequest(base, `/api/student/submissions/${failedId}`, { cookie: studentOneCookie });
     assert.equal(studentFailure.payload.submission.failureReason, "自动批改暂时失败，老师会处理或重新尝试");
     mock.state.failEnabled = false;

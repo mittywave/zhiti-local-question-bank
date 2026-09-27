@@ -33,12 +33,8 @@ async function freePort() {
 }
 
 function startWorker(port, persistTo, vars) {
-  const args = ["dev", "--config", CONFIG, "--port", String(port), "--ip", "127.0.0.1", "--persist-to", persistTo];
-  // Wrangler otherwise rewrites the URL and Host to the production custom domain.
-  // Keep the isolated local-editor worker genuinely loopback; never weaken auth.
-  if (vars.LOCAL_ADMIN_MODE === "true") args.push("--local-upstream", `localhost:${port}`);
-  for (const [key, value] of Object.entries(vars)) args.push("--var", `${key}:${value}`);
-  const child = spawn(WRANGLER, args, { cwd: ROOT, env: { ...process.env, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+  const args = [join(ROOT, "scripts/start-local-test-worker.mjs"), CONFIG, String(port), persistTo, JSON.stringify(vars)];
+  const child = spawn(process.execPath, args, { cwd: ROOT, env: { ...process.env, NO_COLOR: "1", WRANGLER_SEND_METRICS: "false" }, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   child.stdout.on("data", (chunk) => { output += chunk; });
   child.stderr.on("data", (chunk) => { output += chunk; });

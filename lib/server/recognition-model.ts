@@ -3,6 +3,7 @@ import { callStructuredAi, type AiGatewayResult } from "./ai-gateway";
 import { aiTimeoutMs } from "./ai-http";
 
 type RecognitionModelInput = {
+  role?: "recognition" | "diagram";
   prompt: string;
   image: string;
   schema: Record<string, unknown>;
@@ -12,7 +13,7 @@ type RecognitionModelInput = {
 
 export async function callRecognitionModel(input: RecognitionModelInput): Promise<AiGatewayResult> {
   return callStructuredAi({
-    role: "recognition",
+    role: input.role || "recognition",
     signal: input.signal,
     timeoutMs: aiTimeoutMs(process.env.RECOGNITION_TIMEOUT_MS || process.env.AI_REQUEST_TIMEOUT_MS, 180_000),
     prompt: input.prompt,
