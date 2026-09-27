@@ -1,4 +1,4 @@
-name: AI V2 reviewed completion
+name: AI V2 validated source recovery
 on:
   push:
     branches: [feature/ai-provider-center-v2]
@@ -6,157 +6,75 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ai-v2-reviewed-completion
+  group: ai-v2-validated-source-recovery
   cancel-in-progress: true
 jobs:
-  completion:
+  recover:
     if: github.repository == 'mittywave/zhiti-local-question-bank' && github.ref == 'refs/heads/feature/ai-provider-center-v2'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     permissions:
       contents: write
+      actions: read
     env:
+      GH_TOKEN: ${{ github.token }}
       EXPECTED_TREE: aba96a571eaf48b4129ef3de3156a3f07843a58f
-      WRANGLER_SEND_METRICS: 'false'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - name: Apply exact reviewed patches and verify entire source tree
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Recover only the checksum-verified source from completed acceptance steps
         run: |
-          mkdir -p finish-evidence
+          gh api repos/mittywave/zhiti-local-question-bank/actions/jobs/108572628249 > /tmp/acceptance-job.json
           python3 - <<'PY'
-          import base64, gzip, hashlib, json, os, pathlib, urllib.request
-          chunks = '''aba2a18ea86a3a8022355f6e63b024893f260f5d
-          87c6524cf4eb6f7e46f285cd537e642adc46ebbb
-          a8919d12c3a47a0bec698896f7bc9171fd2afaac
-          066b095fa92769c597fcf510a7e509233a1c6499
-          6b9dfae63c8be59633d3cd12bf61b2c2b3c5fd69
-          68067f2275afdec3578c03f7fd912be844963ec3
-          ac7b2ab7e3a6a8f44a8b258664a09c9bd53aa074
-          b74cf919f72429b1958e1bb7ec21916d95b50167
-          19bfbd5af9c4497a8ce3c7142869310b011b4c91
-          91036ba57e3e93c4451104765a9cb997fd329750
-          0eefc5741aa5ba530e1235e14eeac7ccd404aa73
-          fe2e93fba8d945826daac013b1bff1f705bd5a4b
-          ace873f86593177b269ccf4287a73731e7f5aedb
-          fa8b4f50eade9d93304e0bbfc8d60bd6b583ef21
-          69558ad74fea27d4035db0968da64dbe8d83fb50
-          2fe10a969a044062357e4bc5e0d64bccb0a22d19
-          1c06d03f00418690bace512dcb86194608636294
-          5211c2f799d916c3fc5fc85eec2d191029a4f1ca
-          170e14f48d71596e7bb765ecceaefdbadfeaf5dd
-          c4d9b339d23b3f2f226558925a97a9b90763162f
-          689036ef1b1d7af4ba8b275e4de5f74e9a560678
-          d6abe6733fd97122b53d7d585519d98c593c12f8
-          a56e9aff5088f0fb134cb9229ae263d08054dfc8
-          8d7d60a2d76d40691140e64ac7a170738253bd3e
-          fd2c6c74f6a7b6b08fab01ec5ae8dee5da070a79
-          fd613d8c5e2083fe4aaa1b5bb2a3f570bbe24f67
-          7fc708f0036b05b8deae435bc243a0356900d9de
-          61badfca163b8229be06233a4db6233537464b10
-          81820d0cbf3c6b04b534aa385d803cadd8319950
-          99f171b470f9bc402eb6e8144545fcbeff4c9b63
-          37ebfc143dea6a19a3f4a69673d00863b34655b5
-          a1bb139f25e67fc3c9ba8ca4e9d35688434db377'''.split()
-          def blob(sha):
-              req = urllib.request.Request(f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/blobs/{sha}', headers={'Authorization': 'Bearer '+os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  data = base64.b64decode(json.load(response)['content'])
-              assert hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest() == sha
-              return data
-          patch = gzip.decompress(base64.b64decode(b''.join(blob(sha) for sha in chunks)))
-          assert hashlib.sha256(patch).hexdigest() == '65186281c94914357ba07ce1b5f8a79099634dcfab1f9f2e2e168184bc84e48a'
-          pathlib.Path('finish-evidence/reviewed.patch').write_bytes(patch)
-          runtime = blob('b1f0ac0f3a5d784b71d4e1fda0a8799a351e6b37')
-          assert hashlib.sha256(runtime).hexdigest() == '7675768485feba3af9d704d02fab5f2ed93700423a8727930123e502c07cdf82'
-          pathlib.Path('finish-evidence/direct-runtime.patch').write_bytes(runtime)
+          import json
+          job=json.load(open('/tmp/acceptance-job.json'))
+          assert job['run_id']==36302487928
+          required=['Full regression with first-attempt evidence retained','Independent homework stability runs','Actual Worker D1 Chromium WebKit and browser Word downloads','Render every page of both browser-exported Word samples']
+          for name in required:
+              assert next(s for s in job['steps'] if s['name']==name)['conclusion']=='success',name
           PY
-          git apply --index --check finish-evidence/reviewed.patch
-          git apply --index finish-evidence/reviewed.patch
-          git apply --index --check finish-evidence/direct-runtime.patch
-          git apply --index finish-evidence/direct-runtime.patch
-          git rm -- .github/workflows/ai-v2-workspace.yml .github/workflows/ai-v2-finish.yml
-          git diff --cached --check -- . ':(exclude)docs/ai-provider-center-v2-taskbook.md'
-          test "$(git write-tree)" = "$EXPECTED_TREE"
-          git diff --cached --stat | tee finish-evidence/changes.txt
-      - run: npm ci
-      - name: Lint and Studio contracts
+          gh run download 36302487928 --repo mittywave/zhiti-local-question-bank --name ai-v2-finish-evidence --dir /tmp/acceptance
+          mkdir -p /tmp/validated-source
+          tar -xzf /tmp/acceptance/validated-source.tar.gz -C /tmp/validated-source
+          git -C /tmp/validated-source init -q
+          git -C /tmp/validated-source add -A
+          test "$(git -C /tmp/validated-source write-tree)" = "$EXPECTED_TREE"
+      - name: Store staged Git bytes, never build-mutated working files, without updating refs
         run: |
-          set -euo pipefail
-          npm run lint 2>&1 | tee finish-evidence/lint.log
-          npm run test:studio 2>&1 | tee finish-evidence/studio.log
-          npm run benchmark:studio 2>&1 | tee finish-evidence/benchmark.log
-      - name: Full regression with first-attempt evidence retained
-        run: |
-          set -euo pipefail
-          npm test 2>&1 | tee finish-evidence/regression.log
-      - name: Independent homework stability runs
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            node --import ./scripts/local-wrangler-fetch-retry.mjs --test tests/homework-e2e.test.mjs 2>&1 | tee "finish-evidence/homework-${attempt}.log"
-          done
-      - name: Install isolated browser and document renderers
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y libreoffice-writer poppler-utils fonts-noto-cjk fonts-liberation
-          python -m pip install playwright==1.57.0
-          python -m playwright install --with-deps chromium webkit
-      - name: Actual Worker D1 Chromium WebKit and browser Word downloads
-        run: |
-          set -euo pipefail
-          node scripts/build-studio-browser.mjs .studio-browser-test
-          python scripts/verify-studio-browser.py .studio-browser-test --out finish-evidence/studio-browser
-          python scripts/verify-ai-settings-browser.py --out finish-evidence/ai-settings --browsers chromium,webkit 2>&1 | tee finish-evidence/browser.log
-      - name: Render every page of both browser-exported Word samples
-        run: |
-          set -euo pipefail
-          for browser in chromium webkit; do
-            python scripts/render-word-evidence.py "finish-evidence/ai-settings/$browser/actual-page-export.docx" --out "finish-evidence/ai-settings/$browser/word-render"
-          done
-      - name: Store validated Git objects without changing any branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          test "$(git write-tree)" = "$EXPECTED_TREE"
-          git archive "$EXPECTED_TREE" | gzip > finish-evidence/validated-source.tar.gz
+          mkdir -p recovery-evidence
           python3 - <<'PY'
-          import base64, json, os, pathlib, subprocess, urllib.request
+          import base64, hashlib, json, os, pathlib, subprocess, urllib.request
+          root='/tmp/validated-source'
           def git(*args):
-              return subprocess.check_output(['git',*args], text=True).strip()
-          def post(path, body):
-              req = urllib.request.Request(f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/{path}', data=json.dumps(body).encode(), method='POST', headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'], 'Accept':'application/vnd.github+json', 'Content-Type':'application/json'})
-              with urllib.request.urlopen(req, timeout=30) as response:
-                  return json.load(response)
-          parent = os.environ['GITHUB_SHA']
-          entries = []
-          for line in git('diff','--cached','--name-status',parent).splitlines():
-              status, path = line.split('\t')
-              if status == 'D':
-                  entries.append({'path':path,'mode':'100644','type':'blob','sha':None})
-                  continue
-              mode, expected, stage, tracked_path = git('ls-files','--stage',path).split(None,3)
-              assert stage == '0' and tracked_path == path
-              raw = pathlib.Path(path).read_bytes()
-              created = post('blobs', {'encoding':'base64','content':base64.b64encode(raw).decode()})
-              assert created['sha'] == expected
-              entries.append({'path':path,'mode':mode,'type':'blob','sha':expected})
-          tree = post('trees', {'base_tree':git('rev-parse',parent+'^{tree}'), 'tree':entries})['sha']
-          assert tree == os.environ['EXPECTED_TREE']
-          report = {'tree':tree,'parent':parent,'runId':os.environ['GITHUB_RUN_ID'],'files':[x['path'] for x in entries],'refUpdated':False,'productionTouched':False}
-          pathlib.Path('finish-evidence/reviewed-tree.json').write_text(json.dumps(report,indent=2))
+              return subprocess.check_output(['git','-C',root,*args])
+          def post(path,body):
+              req=urllib.request.Request(f'https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}/git/{path}',data=json.dumps(body).encode(),method='POST',headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json','Content-Type':'application/json'})
+              with urllib.request.urlopen(req,timeout=30) as response:return json.load(response)
+          base=json.loads(subprocess.check_output(['gh','api','repos/mittywave/zhiti-local-question-bank/git/trees/bf150902e50d7693f7bff69179ffa331a1fd5d11?recursive=1']))
+          existing={e['sha'] for e in base['tree'] if e['type']=='blob'}
+          entries=[]
+          for record in git('ls-files','--stage','-z').decode().split('\0'):
+              if not record:continue
+              meta,path=record.split('\t',1)
+              mode,sha,stage=meta.split()
+              assert stage=='0'
+              if sha not in existing:
+                  raw=git('cat-file','blob',sha)
+                  assert hashlib.sha1(f'blob {len(raw)}\0'.encode()+raw).hexdigest()==sha
+                  result=post('blobs',{'encoding':'base64','content':base64.b64encode(raw).decode()})
+                  assert result['sha']==sha,(path,sha,result['sha'])
+                  print('Stored',path,sha)
+              entries.append({'path':path,'mode':mode,'type':'blob','sha':sha})
+          tree=post('trees',{'tree':entries})['sha']
+          assert tree==os.environ['EXPECTED_TREE'],(tree,os.environ['EXPECTED_TREE'])
+          report={'tree':tree,'acceptanceRun':36302487928,'recoveryRun':os.environ['GITHUB_RUN_ID'],'parent':os.environ['GITHUB_SHA'],'refUpdated':False,'productionTouched':False}
+          pathlib.Path('recovery-evidence/source-tree.json').write_text(json.dumps(report,indent=2))
           print(json.dumps(report))
           PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ai-v2-finish-evidence
-          path: finish-evidence
+          name: ai-v2-recovered-source
+          path: recovery-evidence
           retention-days: 7
