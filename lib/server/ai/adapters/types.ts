@@ -10,6 +10,8 @@ export interface AdapterInput {
 export interface AdapterOptions {
     format: 'schema' | 'json' | 'prompt';
     reasoning: boolean;
+    effort?: string;
+    tokenLimit?: 'completion' | 'legacy';
 }
 export interface AdapterContext {
     provider: ProviderConfig;

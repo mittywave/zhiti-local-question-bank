@@ -21,6 +21,8 @@ export interface ProviderModel {
         outputModalities?: string[];
         effortLevels?: string[];
         defaultEffort?: string;
+        /** Administrator override; empty means upstream default, missing inherits provider default. */
+        reasoningEffort?: string;
         apiCapabilities?: Record<string, unknown>;
     };
     catalogPresent: boolean;

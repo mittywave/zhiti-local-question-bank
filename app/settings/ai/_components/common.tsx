@@ -11,9 +11,12 @@ export async function api<T>(path: string, body?: unknown, method = 'GET', signa
         const error = new Error(typeof detail.message === 'string' ? detail.message : typeof envelope === 'string' ? envelope : '操作失败') as Error & {
             field?: string;
             code?: string;
+            diagnosticId?: string;
         };
         error.field = typeof detail.field === 'string' ? detail.field : undefined;
         error.code = typeof detail.code === 'string' ? detail.code : undefined;
+        error.diagnosticId = typeof detail.diagnosticId === 'string' ? detail.diagnosticId : undefined;
+        if (error.diagnosticId) error.message += `（诊断 ${error.diagnosticId}）`;
         throw error;
     }
     return data as T;

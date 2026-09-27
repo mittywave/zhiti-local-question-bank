@@ -52,6 +52,26 @@ class Upstream(BaseHTTPRequestHandler):
         if type(self).slow:time.sleep(4)
         if type(self).fail:return self.send({'error':{'message':'synthetic unavailable'}},503)
         s=json.loads(prompt.rsplit('\n',1)[-1]); value=schema_value(s)
+        if 'colors' in value:
+            blocks=b.get('input',[{}])[0].get('content',[]) if b.get('input') else b.get('messages',[{}])[0].get('content',[]) if b.get('messages') else b.get('contents',[{}])[0].get('parts',[])
+            images=[]
+            for part in blocks:
+                v=part.get('image_url')
+                if isinstance(v,dict):v=v.get('url')
+                if v:images.append(v.split(',',1)[-1])
+                elif part.get('inlineData'):images.append(part['inlineData']['data'])
+                elif part.get('type')=='image':images.append(part['source']['data'])
+            palette={(220,25,25):'red',(20,175,50):'green',(20,70,230):'blue',(245,220,30):'yellow',(145,35,190):'purple',(250,125,20):'orange'}
+            value['colors']=[]
+            for image in images:
+                raw=base64.b64decode(image);pos=8;data=b''
+                while pos<len(raw):
+                    length=struct.unpack('>I',raw[pos:pos+4])[0];tag=raw[pos+4:pos+8]
+                    if tag==b'IDAT':data+=raw[pos+8:pos+8+length]
+                    pos+=length+12
+                # The first PNG scanline pixel has no left/up neighbours.
+                value['colors'].append(palette[tuple(zlib.decompress(data)[1:4])])
+
         if 'stem' in value:value.update(stem='计算 $x=\\frac{1}{2}$',answer='1/2',analysis='约分得到 $x=\\frac{1}{2}$。',source='合成验收样本')
         if 'should_reconstruct' in value:
             value.update(should_reconstruct=True,confidence=.99,strokes=[{'id':'segment','points':[{'x':100,'y':300},{'x':850,'y':300}], 'closed':False,'width':5,'color':'#000000','dash':[]}],expected_labels=[],labels=[],constraints=[],warnings=[],excluded_annotations=[])
@@ -149,7 +169,18 @@ def exercise(page,app,out,upstream):
     def settle():expect(button('保存配置')).to_be_disabled();expect(page.get_by_role('status')).to_contain_text('保存')
     def new(name,kind,protocol,suffix):
         button('添加第一个提供方' if not app.ok(API)['providers'] else '添加提供方').click()
-        page.get_by_label('名称',exact=True).fill(name);page.get_by_label('接入类型',exact=True).select_option(kind);page.get_by_label('Base URL',exact=True).fill(upstream+suffix);page.get_by_label('API 协议',exact=True).select_option(protocol);page.get_by_label('密钥操作',exact=True).select_option('replace');page.locator('[name=apiKey]').fill('synthetic-browser-provider-key');page.get_by_label('允许任务使用此连接',exact=False).check();button('保存配置').click();settle()
+        page.get_by_label('名称',exact=True).fill(name);page.get_by_label('接入类型',exact=True).select_option(kind);page.get_by_label('Base URL',exact=True).fill(upstream+suffix)
+        if kind!='sub2api':page.get_by_label('API 协议',exact=True).select_option(protocol)
+        if kind=='sub2api':
+            mode='antigravity_gemini' if protocol=='gemini_generate_content' else 'antigravity_claude' if protocol=='anthropic_messages' else 'openai'
+            page.get_by_label('Sub2API 接口格式',exact=True).select_option(mode)
+            expect(page.get_by_label('Base URL',exact=True)).to_have_value(upstream+suffix)
+            expect(page.get_by_label('API 协议',exact=True)).to_have_value(protocol if mode!='openai' else 'auto')
+            # This instance deliberately advertises a missing catalog: keep that
+            # explicit deployment override, do not infer a universal Claude URL.
+            if mode=='antigravity_claude':
+                page.get_by_text('高级设置',exact=True).click();page.locator('[name=models]').fill('models')
+        page.get_by_label('密钥操作',exact=True).select_option('replace');page.locator('[name=apiKey]').fill('synthetic-browser-provider-key');page.get_by_label('允许任务使用此连接',exact=False).check();button('保存配置').click();settle()
         assert page.locator('[name=apiKey]').count()==0
         return next(p for p in app.ok(API)['providers'] if p['name']==name)
     ds=new('DeepSeek · 合成验收','deepseek','chat_completions','/deepseek')
@@ -165,6 +196,13 @@ def exercise(page,app,out,upstream):
                 b=button(label);expect(b).to_be_visible();metric=b.evaluate('e=>({height:e.getBoundingClientRect().height,fg:getComputedStyle(e).color,bg:getComputedStyle(e).backgroundColor})');assert metric['height']>=44;assert contrast(metric['fg'],metric['bg'])>=4.5,metric
             page.screenshot(path=str(out/f'models-{theme}-{width}.png'),full_page=True)
     page.set_viewport_size({'width':1440,'height':1000});r['responsiveThemes']=6
+    # Model-specific effort survives catalog refresh, without altering other models.
+    model_card=page.locator('article').filter(has=page.get_by_text('Model-A',exact=True))
+    model_card.get_by_role('button',name='编辑',exact=True).click();page.get_by_label('此模型思考档位',exact=True).select_option('high');button('保存模型').click();expect(page.get_by_role('status')).to_contain_text('模型已保存')
+    button('获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录')
+    assert next(m for m in next(p for p in app.ok(API)['providers'] if p['id']==ds['id'])['models'] if m['id']=='Model-A')['metadata']['reasoningEffort']=='high'
+    tab('诊断');page.get_by_label('测试模型',exact=True).select_option('Model-A');page.get_by_label('测试项目',exact=True).select_option('vision');page.get_by_label('我同意发送合成样本',exact=False).check();button('测试模型').click();expect(page.get_by_role('status')).to_contain_text('合成样本通过');tab('模型目录')
+    r['perModelEffort']=True;r['imageChallenge']=True
     # Manual case-sensitive model, duplicate rejected; blank form cannot submit.
     button('添加模型').click();button('保存模型').click();expect(page.locator('[name=modelId]')).to_be_focused();page.locator('[name=modelId]').fill('Manual-Case');page.get_by_label('文本能力',exact=True).select_option('supported');page.get_by_label('图片能力',exact=True).select_option('unsupported');page.get_by_label('结构化能力',exact=True).select_option('supported');button('保存模型').click();expect(page.get_by_text('Manual-Case',exact=True)).to_be_visible()
     button('添加模型').click();page.locator('[name=modelId]').fill('Manual-Case');button('保存模型').click();expect(page.get_by_role('alert')).to_contain_text('已存在');button('关闭编辑').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();button('获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');assert any(m['id']=='Manual-Case' for m in app.ok(API)['providers'][0]['models'])

@@ -36,3 +36,27 @@ export function providerEndpoint(base: string, path: string | null, model = ''):
 export function credentialScope(base: string, endpoints: EndpointProfile) {
     return JSON.stringify([normalizeProviderBase(base), endpoints.auth, endpoints.models, endpoints.responses, endpoints.chat, endpoints.gemini, endpoints.messages]);
 }
+
+export type Sub2ApiMode = 'openai' | 'antigravity_gemini' | 'antigravity_claude';
+export const SUB2API_MODES = {
+    openai: { label: 'OpenAI 兼容', protocol: 'auto', suffix: '/v1' },
+    antigravity_gemini: { label: 'Antigravity → Gemini', protocol: 'gemini_generate_content', suffix: '/antigravity/v1beta' },
+    antigravity_claude: { label: 'Antigravity → Claude', protocol: 'anthropic_messages', suffix: '/antigravity/v1' },
+} as const;
+export function sub2ApiMode(protocol: WireProtocol): Sub2ApiMode {
+    return protocol === 'gemini_generate_content' ? 'antigravity_gemini' : protocol === 'anthropic_messages' ? 'antigravity_claude' : 'openai';
+}
+/** Preview only. Applying this suggestion is a separate, explicit user action. */
+export function suggestedSub2ApiBase(base: string, mode: Sub2ApiMode) {
+    const normalized = normalizeProviderBase(base);
+    return normalized.replace(/\/(?:antigravity\/v1beta|antigravity\/v1|v1beta|v1)$/, '') + SUB2API_MODES[mode].suffix;
+}
+export function withSub2ApiMode(draft: ProviderWrite, mode: Sub2ApiMode): ProviderWrite {
+    const wireApi = SUB2API_MODES[mode].protocol;
+    const previous = defaultEndpoints(draft.wireApi), defaults = defaultEndpoints(wireApi);
+    const endpoints = { ...draft.endpoints,
+        models: draft.endpoints.models === previous.models ? defaults.models : draft.endpoints.models };
+    const scopeChanged = JSON.stringify(endpoints) !== JSON.stringify(draft.endpoints);
+    return { ...draft, wireApi, endpoints,
+        credential: scopeChanged && draft.credential.action === 'replace' ? { action: 'replace', value: '' } : draft.credential };
+}

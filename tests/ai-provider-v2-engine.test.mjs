@@ -25,7 +25,7 @@ for(const protocol of ['responses','chat_completions','gemini_generate_content',
 });
 test('DeepSeek Chat sends json_object/thinking/max_tokens, Responses uses its own text.format contract',async()=>{
  for(const protocol of ['chat_completions','responses']){
-  const m=await setup(protocol,'deepseek');m.runtime.provider.outputStrategy='schema';m.runtime.provider.reasoningEffort='high';
+  const m=await setup(protocol,'deepseek');m.runtime.provider.outputStrategy='schema';m.runtime.provider.reasoningEffort='high';m.runtime.model.metadata.effortLevels=['low','high'];
   const {calls,result}=await mocked(()=>json(good(protocol)),()=>m.engine.executeTargets(m.runtime,null,m.input));assert.equal(result.code,'OK');const b=calls[0].body;
   if(protocol==='chat_completions'){assert.deepEqual(b.response_format,{type:'json_object'});assert.deepEqual(b.thinking,{type:'enabled'});assert.equal(b.reasoning_effort,'high');assert.ok(b.max_tokens);assert.ok(!('max_completion_tokens' in b));}
   else {assert.equal(b.text.format.type,'json_schema');assert.ok(!('strict' in b.text.format));assert.ok(!('store' in b));assert.deepEqual(b.reasoning,{effort:'high'});}
@@ -78,3 +78,9 @@ test('probe budget is one; queue retry policy separates outer delivery attempts'
  const m=await setup('auto');const {calls}=await mocked(()=>json({error:{message:'Endpoint unsupported'}},404),()=>m.engine.executeTargets(m.runtime,null,m.input,{maxAttempts:1}));assert.equal(calls.length,1);
  const {AiQueueFailure,queueRetryDelay}=await loadSource('lib/server/ai/queue-policy.ts');assert.equal(queueRetryDelay(new AiQueueFailure({code:'OUTPUT_INVALID',status:422}),1,4,30),null);assert.equal(queueRetryDelay(new AiQueueFailure({code:'UPSTREAM_TIMEOUT',status:504}),1,4,30),null);assert.equal(queueRetryDelay(new AiQueueFailure({code:'UPSTREAM_RATE_LIMITED',status:429,retryAfter:'120'}),1,4,30),120);assert.equal(queueRetryDelay(new AiQueueFailure({code:'UPSTREAM_FAILED',status:503}),4,4,30),null);
 });
+
+// Server-only probe postconditions must reject a guessed but schema-valid answer.
+test('server postcondition failure never marks a probe successful or triggers a backup',async()=>{const m=await setup();const {result,calls}=await mocked(()=>json(good()),()=>m.engine.executeTargets(m.runtime,m.runtime,{...m.input,validateOutput:()=>false}));assert.equal(result.code,'OUTPUT_INVALID');assert.equal(calls.length,1);});
+
+test('legacy compatible Chat token limit negotiation preserves the cap and shared budget',async()=>{const m=await setup('chat_completions');const {result,calls}=await mocked((_,n)=>n===1?json({error:{message:'Unsupported parameter max_completion_tokens'}},400):json(good('chat_completions')),()=>m.engine.executeTargets(m.runtime,null,m.input));assert.equal(result.code,'OK');assert.equal(calls.length,2);assert.equal(calls[0].body.max_completion_tokens,32768);assert.equal(calls[1].body.max_tokens,32768);assert.equal('max_completion_tokens' in calls[1].body,false);});
+test('non-JSON 429 retains rate classification and never rotates providers',async()=>{const m=await setup();const {result,calls}=await mocked(()=>new Response('<html>limited</html>',{status:429,headers:{'retry-after':'120'}}),()=>m.engine.executeTargets(m.runtime,m.runtime,m.input));assert.equal(result.code,'UPSTREAM_RATE_LIMITED');assert.equal(result.retryAfter,'120');assert.equal(calls.length,1);});

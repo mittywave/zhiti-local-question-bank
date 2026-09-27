@@ -6,6 +6,7 @@ import { CAPABILITIES, mergeCatalog, object, requireCapabilities, unknownCapabil
 import { encryptionReady, openCredential, sealCredential } from './credentials';
 import { assertTrustedDestination } from './endpoint-policy';
 import { conflict, invalid, ProviderError } from './errors';
+import { modelReasoningEffort, modelConfigurationFingerprint, normalizeEffort } from './model-options';
 type Row = Record<string, string | number | null>;
 export interface CenterState {
     providers: ProviderConfig[];
@@ -270,6 +271,14 @@ export async function saveManualModel(id: string, value: unknown) {
         capabilities[name] = { state: annotation as 'unknown' | 'supported' | 'unsupported', source: 'manual', observedAt: now, configurationFingerprint: provider.fingerprint };
     }
     const model: ProviderModel = { id: modelId, displayName: text(input.displayName || modelId, 'displayName', 200), capabilities, metadata: existing?.metadata || {}, catalogPresent: existing?.catalogPresent || false, manual: true, legacyCompatible: existing?.legacyCompatible || false, updatedAt: now };
+    if (input.reasoningEffort === null) {
+        model.metadata = { ...model.metadata };
+        delete model.metadata.reasoningEffort;
+    } else if (input.reasoningEffort !== undefined) {
+        const effort = normalizeEffort(provider.kind, text(input.reasoningEffort, 'reasoningEffort', 40, true));
+        model.metadata = { ...model.metadata, reasoningEffort: effort };
+        modelReasoningEffort(provider, model, provider.wireApi === 'auto' ? 'responses' : provider.wireApi);
+    }
     await atomic(state.routing.revision, [modelWrite(id, [model])]);
     return model;
 }
@@ -329,7 +338,7 @@ export async function saveRouting(value: unknown) {
 }
 export async function diagnostics(id: string) {
     const provider = findProvider(await readCenter(), id), rows = (await stmt('SELECT * FROM ai_provider_diagnostics WHERE provider_id=? ORDER BY created_at DESC,id LIMIT 50', id).all<Row>()).results;
-    return rows.map((row: Row): ProviderDiagnostic => ({ id: String(row.id), providerId: id, modelId: row.model_id === null ? null : String(row.model_id), protocol: row.protocol as ProviderDiagnostic['protocol'], fingerprint: String(row.fingerprint), providerRevision: Number(row.provider_revision), credentialRevision: Number(row.credential_revision), kind: row.kind as ProviderDiagnostic['kind'], role: row.role ? row.role as AiTaskRole : undefined, endpoint: String(row.endpoint), status: Number(row.status), code: String(row.code), latencyMs: Number(row.latency_ms), attempts: Number(row.attempts), upperAttempt: Number(row.upper_attempt) || 1, fallbackUsed: Boolean(row.fallback_used), createdAt: Number(row.created_at), stale: row.fingerprint !== provider.fingerprint }));
+    return rows.map((row: Row): ProviderDiagnostic => ({ id: String(row.id), providerId: id, modelId: row.model_id === null ? null : String(row.model_id), protocol: row.protocol as ProviderDiagnostic['protocol'], fingerprint: String(row.fingerprint), providerRevision: Number(row.provider_revision), credentialRevision: Number(row.credential_revision), kind: row.kind as ProviderDiagnostic['kind'], role: row.role ? row.role as AiTaskRole : undefined, endpoint: String(row.endpoint), status: Number(row.status), code: String(row.code), latencyMs: Number(row.latency_ms), attempts: Number(row.attempts), upperAttempt: Number(row.upper_attempt) || 1, fallbackUsed: Boolean(row.fallback_used), createdAt: Number(row.created_at), stale: row.fingerprint !== (row.model_id === null ? provider.fingerprint : (() => { const model = provider.models.find(m => m.id === row.model_id); return model ? modelConfigurationFingerprint(provider, model) : ''; })()) }));
 }
 export async function recordDiagnostic(d: Omit<ProviderDiagnostic, 'id' | 'createdAt'>) {
     const id = crypto.randomUUID(), now = Date.now();

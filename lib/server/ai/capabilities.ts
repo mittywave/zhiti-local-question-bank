@@ -47,6 +47,7 @@ export function mergeCatalog(existing: ProviderModel[], discovered: ProviderMode
         const model = structuredClone(incoming), old = models.get(model.id);
         if (old) {
             model.manual = old.manual;
+            if (old.metadata.reasoningEffort !== undefined) model.metadata.reasoningEffort = old.metadata.reasoningEffort;
             model.legacyCompatible = old.legacyCompatible;
             for (const name of CAPABILITIES) {
                 const prior = old.capabilities[name];

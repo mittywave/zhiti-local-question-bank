@@ -7,6 +7,7 @@ import { ProviderError } from './errors';
 import { diagnostics, findProvider, providerKey, readCenter, recordDiagnostic, saveCatalog, saveProbeEvidence } from './provider-repository';
 import { authentication, checkProbeModel, executeTargets } from './engine';
 import type { ConcreteProtocol } from './adapters/types';
+import { visionChallenge } from './vision-probe';
 export const PROBE_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVQIHWP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 export async function discoverModels(id: string, expectedFingerprint: unknown, signal: AbortSignal) {
     const state = await readCenter(), p = findProvider(state, id);
@@ -79,8 +80,14 @@ export async function testModel(id: string, value: unknown, signal: AbortSignal)
         throw new ProviderError('INVALID_INPUT', '测试协议必须属于当前配置的接口范围。');
     checkProbeModel(p, model, input.kind === 'vision');
     const key = await providerKey(state, p), kind = input.kind as ProviderDiagnostic['kind'];
-    const schema = kind === 'vision' ? { type: 'object', properties: { color: { const: 'red', type: 'string' } }, required: ['color'], additionalProperties: false } : { type: 'object', properties: { ok: { const: true, type: 'boolean' } }, required: ['ok'], additionalProperties: false };
-    const result = await executeTargets({ provider: p, model, key }, null, { role: 'text', prompt: kind === 'vision' ? 'Identify the dominant color of the attached synthetic image. Return JSON with a single color field.' : 'This is a synthetic connection test. Return JSON {"ok":true}.', schema, schemaName: 'ai_connection_probe', images: kind === 'vision' ? [PROBE_IMAGE] : [], maxTokens: 512, signal, timeoutMs: Math.min(30000, p.timeoutMs) }, { kind, maxAttempts: 1, protocol: protocol as ConcreteProtocol });
+    const challenge = kind === 'vision' ? visionChallenge() : null;
+    const schema = challenge?.schema || { type: 'object', properties: { ok: { const: true, type: 'boolean' } }, required: ['ok'], additionalProperties: false };
+    const result = await executeTargets({ provider: p, model, key }, null, {
+        role: 'text', prompt: challenge?.prompt || 'This is a synthetic connection test. Return JSON {"ok":true}.',
+        schema, schemaName: 'ai_connection_probe', images: challenge?.images || [],
+        validateOutput: challenge?.validateOutput, maxTokens: 512, signal,
+        timeoutMs: Math.min(30000, p.timeoutMs),
+    }, { kind, maxAttempts: 1, protocol: protocol as ConcreteProtocol });
     signal.throwIfAborted();
     if (result.code === 'OK')
         await saveProbeEvidence(id, model.id, p.fingerprint, kind === 'vision' ? ['text', 'vision'] : kind === 'structured' ? ['text', 'structured'] : ['text'], model.updatedAt);

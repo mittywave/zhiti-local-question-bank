@@ -4,6 +4,7 @@ import { aiFetch, AiTimeoutError, aiTimeoutMs, readAiBody, withAiDeadline } from
 import { matchesAiSchema } from '../ai-schema';
 import { capabilityState } from './capabilities';
 import { setting } from './credentials';
+import { modelReasoningEffort, modelConfigurationFingerprint } from './model-options';
 import { assertTrustedDestination } from './endpoint-policy';
 import { ProviderError } from './errors';
 import { readCenter, recordDiagnostic } from './provider-repository';
@@ -15,6 +16,8 @@ import { anthropicBody, finalAnthropic } from './adapters/anthropic';
 import { finalChat, finalResponse, imageData, obj, type AdapterInput, type AdapterOptions, type ConcreteProtocol, type Json } from './adapters/types';
 export interface EngineInput extends AdapterInput {
     upperAttempt?: number;
+    /** Server-only postcondition for synthetic probes; never accepted from HTTP input. */
+    validateOutput?: (value: unknown) => boolean;
     role: AiTaskRole;
     signal?: AbortSignal;
     timeoutMs?: number;
@@ -79,7 +82,8 @@ function initialOptions(provider: ProviderConfig, model: ProviderModel, protocol
     let format: AdapterOptions['format'] = provider.outputStrategy === 'auto' ? native ? 'schema' : protocol === 'anthropic_messages' ? 'prompt' : 'json' : provider.outputStrategy;
     if (provider.kind === 'deepseek' && protocol === 'chat_completions' && format === 'schema')
         format = 'json';
-    return { format, reasoning: Boolean(provider.reasoningEffort) };
+    const effort = modelReasoningEffort(provider, model, protocol);
+    return { format, reasoning: Boolean(effort), effort };
 }
 function requestBody(protocol: ConcreteProtocol, runtime: RuntimeTarget, input: AdapterInput, options: AdapterOptions) {
     const context = { provider: runtime.provider, model: runtime.model, input, options };
@@ -95,7 +99,7 @@ interface Budget {
     max: number;
 }
 async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget, signal: AbortSignal, fixed?: ConcreteProtocol): Promise<EngineResult> {
-    const p = runtime.provider, cacheKey = `${p.fingerprint}:${runtime.model.id}`;
+    const p = runtime.provider, cacheKey = modelConfigurationFingerprint(p, runtime.model);
     assertTrustedDestination(p.baseUrl, p.legacy);
     const order: ConcreteProtocol[] = fixed ? [fixed] : p.wireApi === 'auto' ? ['responses', 'chat_completions'] : [p.wireApi];
     const remembered = cache.get(cacheKey);
@@ -120,7 +124,7 @@ async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget
                 payload = obj(JSON.parse(raw));
             }
             catch {
-                return { ...failure('UPSTREAM_INVALID_RESPONSE', response.ok ? 502 : response.status, budget.used), protocol, retryAfter };
+                return { ...failure(response.ok ? 'UPSTREAM_INVALID_RESPONSE' : classify(response.status, {}), response.ok ? 502 : response.status, budget.used), protocol, retryAfter };
             }
             if (!response.ok || payload.error) {
                 const code = classify(response.ok ? 502 : response.status, payload), error = obj(payload.error), detail = `${error.message || ''} ${error.param || ''}`;
@@ -129,6 +133,10 @@ async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget
                     return result;
                 // Reject-only negotiation: never replay a successful, refused or truncated output.
                 if (['UPSTREAM_REJECTED', 'ENDPOINT_UNSUPPORTED'].includes(code) && [400, 422].includes(response.status) && unsupported(detail) && budget.used < budget.max) {
+                    if (protocol === 'chat_completions' && p.kind !== 'deepseek' && options.tokenLimit !== 'legacy' && /max_completion_tokens/i.test(detail)) {
+                        options.tokenLimit = 'legacy';
+                        continue;
+                    }
                     if (options.reasoning && /reasoning|thinking/i.test(detail)) {
                         options.reasoning = false;
                         continue;
@@ -154,7 +162,7 @@ async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget
             let parsed: unknown;
             try {
                 parsed = JSON.parse(output.text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
-                if (!matchesAiSchema(parsed, input.schema))
+                if (!matchesAiSchema(parsed, input.schema) || input.validateOutput?.(parsed) === false)
                     throw new Error('schema');
             }
             catch {
@@ -172,7 +180,7 @@ async function diagnostic(runtime: RuntimeTarget, result: EngineResult, input: E
     if (runtime.provider.id === 'environment')
         return;
     const p = runtime.provider, protocol = result.protocol || (p.wireApi === 'auto' ? 'responses' : p.wireApi);
-    const d = await recordDiagnostic({ providerId: p.id, modelId: runtime.model.id, protocol, fingerprint: p.fingerprint, providerRevision: p.revision, credentialRevision: p.credentialRevision, kind, role: kind === 'task' ? input.role : undefined,
+    const d = await recordDiagnostic({ providerId: p.id, modelId: runtime.model.id, protocol, fingerprint: modelConfigurationFingerprint(p, runtime.model), providerRevision: p.revision, credentialRevision: p.credentialRevision, kind, role: kind === 'task' ? input.role : undefined,
         endpoint: inferenceEndpoint(p, protocol, runtime.model.id), status: result.status, code: result.code, latencyMs: Date.now() - start, attempts: result.attempts, upperAttempt: Math.max(1, Math.min(20, input.upperAttempt || 1)), fallbackUsed: result.fallbackUsed });
     result.diagnosticId = d.id;
 }
@@ -197,7 +205,8 @@ export async function executeTargets(primary: RuntimeTarget, backup: RuntimeTarg
             let output = await invoke(primary, input, budget, signal, options.protocol);
             // Explicit backup is never a means of evading limits, rejections, or uncertain billing.
             if (backup && !output.retryAfter && ['UPSTREAM_FAILED', 'OUTPUT_EMPTY'].includes(output.code) && budget.used < budget.max) {
-                await diagnostic(primary, output, input, options.kind || 'task', start);
+                try { await diagnostic(primary, output, input, options.kind || 'task', start); }
+                catch { /* Recording failures cannot change the authorized request policy. */ }
                 signal.throwIfAborted();
                 active = backup;
                 output = await invoke(backup, input, budget, signal, options.protocol);
