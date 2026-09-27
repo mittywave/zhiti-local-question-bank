@@ -26,7 +26,7 @@
 .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 .nav { display:flex; gap:8px; margin:20px 0; flex-wrap:wrap; }
 .nav button[aria-pressed=true], .list button[aria-pressed=true] { border-color:var(--focus); background:var(--soft); }
-.grid { display:grid; grid-template-columns:260px minmax(0,1fr)); gap:24px; align-items:start; }
+.grid { display:grid; grid-template-columns:260px minmax(0,1fr); gap:24px; align-items:start; }
 .sidebar { position:sticky; top:24px; }
 .list { display:grid; gap:8px; }
 .list button { text-align:left; white-space:normal; display:grid; gap:3px; width:100%; }
