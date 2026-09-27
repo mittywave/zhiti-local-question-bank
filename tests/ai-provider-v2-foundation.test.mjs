@@ -4,7 +4,7 @@ import {loadSource} from './load-source.mjs';
 import {sqliteD1,legacyCipher,insertLegacy} from './helpers/ai-v2-sqlite.mjs';
 const secret='synthetic-only-encryption-secret';
 async function modules(db=sqliteD1()) {
-  const bindings={DB:db,LOCAL_ADMIN_MODE:'true',AI_PROVIDER_ENCRYPTION_KEY:secret,AI_PROVIDER_ALLOWED_BASES:'https://fixture.invalid,http://127.0.0.1:4011'};
+  const bindings={DB:db,LOCAL_ADMIN_MODE:'true',AI_PROVIDER_ENCRYPTION_KEY:secret};
   return {db,bindings,repo:await loadSource('lib/server/ai/provider-repository.ts',bindings),crypto:await loadSource('lib/server/ai/credentials.ts',bindings),presets:await loadSource('lib/ai-provider-presets.ts')};
 }
 function input(presets,patch={}) {return {...presets.newProvider(),baseUrl:'https://fixture.invalid/tenant/v1',credential:{action:'replace',value:'synthetic-provider-key'},enabled:true,...patch};}
