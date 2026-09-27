@@ -208,27 +208,27 @@ def exercise(page,app,out,upstream):
     # Guard dirty state and keyboard cancel. The saved key is not retrieved.
     page.get_by_label('名称',exact=True).fill('尚未保存');tab('任务分配');expect(page.get_by_role('dialog')).to_be_visible();page.keyboard.press('Escape');expect(page.get_by_label('名称',exact=True)).to_have_value('尚未保存');button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();expect(page.get_by_label('名称',exact=True)).to_have_value(ds['name'])
     page.get_by_label('Base URL',exact=True).fill(upstream+'/different-tenant');button('保存配置').click();expect(page.get_by_role('alert')).to_contain_text('范围已变化');assert app.ok(API)['providers'][0]['baseUrl']==upstream+'/deepseek';button('放弃修改').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click()
-    tab('模型目录');button('获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');expect(page.get_by_text('Model-A',exact=True).first).to_be_visible()
+    tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');expect(page.get_by_text('Model-A',exact=True).first).to_be_visible()
     for theme in ['light','dark']:
         for width in [390,768,1440]:
             page.set_viewport_size({'width':width,'height':1000});page.evaluate('(t)=>{document.documentElement.dataset.theme=t;localStorage.setItem("mitty-color-theme",t)}',theme)
             sizes=page.evaluate('({width:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth})');assert sizes['scroll']<=sizes['width'],sizes
-            for label in ['获取上游模型','添加模型']:
+            for label in ['重新获取上游模型','添加模型']:
                 b=button(label);expect(b).to_be_visible();metric=b.evaluate('e=>({height:e.getBoundingClientRect().height,fg:getComputedStyle(e).color,bg:getComputedStyle(e).backgroundColor})');assert metric['height']>=44;assert contrast(metric['fg'],metric['bg'])>=4.5,metric
             page.screenshot(path=str(out/f'models-{theme}-{width}.png'),full_page=True)
     page.set_viewport_size({'width':1440,'height':1000});r['responsiveThemes']=6
     # Model-specific effort survives catalog refresh, without altering other models.
     model_card=page.locator('article').filter(has=page.get_by_text('Model-A',exact=True))
     model_card.get_by_role('button',name='编辑',exact=True).click();page.get_by_label('此模型思考档位',exact=True).select_option('high');button('保存模型').click();expect(page.get_by_role('status')).to_contain_text('模型已保存')
-    button('获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录')
+    button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录')
     assert next(m for m in next(p for p in app.ok(API)['providers'] if p['id']==ds['id'])['models'] if m['id']=='Model-A')['metadata']['reasoningEffort']=='high'
     tab('诊断');page.get_by_label('测试模型',exact=True).select_option('Model-A');page.get_by_label('测试项目',exact=True).select_option('vision');page.get_by_label('我同意发送合成样本',exact=False).check();button('测试模型').click();expect(page.get_by_role('status')).to_contain_text('合成样本通过');tab('模型目录')
     r['perModelEffort']=True;r['imageChallenge']=True
     # Manual case-sensitive model, duplicate rejected; blank form cannot submit.
     button('添加模型').click();button('保存模型').click();expect(page.locator('[name=modelId]')).to_be_focused();page.locator('[name=modelId]').fill('Manual-Case');page.get_by_label('文本能力',exact=True).select_option('supported');page.get_by_label('图片能力',exact=True).select_option('unsupported');page.get_by_label('结构化能力',exact=True).select_option('supported');button('保存模型').click();expect(page.get_by_text('Manual-Case',exact=True)).to_be_visible()
-    button('添加模型').click();page.locator('[name=modelId]').fill('Manual-Case');button('保存模型').click();expect(page.get_by_role('alert')).to_contain_text('已存在');button('关闭编辑').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();button('获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');assert any(m['id']=='Manual-Case' for m in app.ok(API)['providers'][0]['models'])
-    gm=new('Sub2API · Gemini','sub2api','gemini_generate_content','/tenant/antigravity/v1beta');tab('模型目录');button('获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录')
-    cl=new('Sub2API · Claude','sub2api','anthropic_messages','/claude/antigravity/v1');tab('模型目录');button('获取上游模型').click();expect(page.get_by_role('alert')).to_contain_text('目录接口不可用');button('添加模型').click();page.locator('[name=modelId]').fill('Claude-Alias');
+    button('添加模型').click();page.locator('[name=modelId]').fill('Manual-Case');button('保存模型').click();expect(page.get_by_role('alert')).to_contain_text('已存在');button('关闭编辑').click();page.get_by_role('dialog').get_by_role('button',name='确认',exact=True).click();button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录');assert any(m['id']=='Manual-Case' for m in app.ok(API)['providers'][0]['models'])
+    gm=new('Sub2API · Gemini','sub2api','gemini_generate_content','/tenant/antigravity/v1beta');tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('status')).to_contain_text('目录')
+    cl=new('Sub2API · Claude','sub2api','anthropic_messages','/claude/antigravity/v1');tab('模型目录');button('重新获取上游模型').click();expect(page.get_by_role('alert')).to_contain_text('目录接口不可用');button('添加模型').click();page.locator('[name=modelId]').fill('Claude-Alias');
     for cap in ['文本能力','图片能力','结构化能力']:page.get_by_label(cap,exact=True).select_option('supported')
     button('保存模型').click();expect(page.get_by_text('Claude-Alias',exact=True)).to_be_visible();tab('诊断');expect(button('测试模型')).to_be_disabled();page.get_by_label('我同意发送合成样本',exact=False).check();button('测试模型').click();expect(page.get_by_role('status')).to_contain_text('合成样本通过');page.screenshot(path=str(out/'claude-diagnostics.png'),full_page=True)
     Upstream.slow=True;before=len(Upstream.calls);button('测试模型').click();expect(button('取消测试')).to_be_visible();
