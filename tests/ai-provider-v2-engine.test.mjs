@@ -5,7 +5,7 @@ import {sqliteD1} from './helpers/ai-v2-sqlite.mjs';
 const schema={type:'object',properties:{ok:{type:'boolean',const:true}},required:['ok'],additionalProperties:false};
 const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVQIHWP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC';
 async function setup(protocol='responses',kind='custom'){
- const db=sqliteD1(),bindings={DB:db,LOCAL_ADMIN_MODE:'true',AI_PROVIDER_ENCRYPTION_KEY:'unit-synthetic-encryption',AI_PROVIDER_ALLOWED_BASES:'https://fixture.invalid'};
+ const db=sqliteD1(),bindings={DB:db,LOCAL_ADMIN_MODE:'true',AI_PROVIDER_ENCRYPTION_KEY:'unit-synthetic-encryption'};
  const repo=await loadSource('lib/server/ai/provider-repository.ts',bindings),presets=await loadSource('lib/ai-provider-presets.ts'),engine=await loadSource('lib/server/ai/engine.ts',bindings);
  const p=await repo.saveProvider(null,{...presets.newProvider(kind),name:'Fixture',baseUrl:'https://fixture.invalid/tenant',wireApi:protocol,credential:{action:'replace',value:'synthetic-unit-credential'},enabled:true});
  await repo.saveManualModel(p.id,{id:'Case/Alias',expectedRevision:1,expectedConfigurationRevision:(await repo.readCenter()).routing.revision,capabilities:{text:'supported',vision:'supported',structured:'supported'}});
