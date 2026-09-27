@@ -17,12 +17,14 @@ test('V2 endpoint normalization preserves roots, versions and native gateway pre
   for(const base of ['https://u:p@host','file:///tmp','https://host/?key=x','https://host/#key','https://host/a/../b','https://host/a/%2e%2e/b'])assert.throws(()=>n(base));
   for(const path of ['//evil/path','https://evil','/absolute','../escape','models?key=x','%2e%2e/x','a\\b','a//b'])assert.throws(()=>e('https://fixture.invalid/tenant',path));
 });
-test('model catalog preserves case and metadata without brand capability inference',async()=>{
+test('model catalog refresh replaces stale upstream entries while preserving explicit exceptions',async()=>{
   const {parseCatalog,mergeCatalog}=await loadSource('lib/server/ai/capabilities.ts');
   const models=parseCatalog({data:[{id:'M',name:'Named',input_modalities:['text','image'],output_modalities:['text'],effort:{supported_levels:['low','max']},api_capabilities:{structured_outputs:true}},{id:'m'},{id:'M'},{id:'VisionSuperBrand'}]},'fp');
   assert.deepEqual(models.map(m=>m.id),['M','m','VisionSuperBrand']);assert.equal(models[0].capabilities.vision.state,'supported');assert.deepEqual(models[0].metadata.effortLevels,['low','max']);assert.equal(models[2].capabilities.vision.state,'unknown');
-  const merged=mergeCatalog(models,parseCatalog({data:[{id:'m',input_modalities:['text']}]},'fp'),'fp');
-  assert.equal(merged.find(m=>m.id==='M').catalogPresent,false);assert.equal(merged.find(m=>m.id==='m').capabilities.vision.state,'unsupported');
+  const fresh=parseCatalog({data:[{id:'m',input_modalities:['text']}]},'fp');
+  const replaced=mergeCatalog(models,fresh,'fp');assert.deepEqual(replaced.map(m=>m.id),['m']);assert.equal(replaced[0].capabilities.vision.state,'unsupported');
+  const retained=mergeCatalog(models,fresh,'fp',new Set(['M']));assert.deepEqual(retained.map(m=>m.id).sort(),['M','m']);assert.equal(retained.find(m=>m.id==='M').catalogPresent,false);
+  models[2].manual=true;const manual=mergeCatalog(models,fresh,'fp');assert.deepEqual(manual.map(m=>m.id).sort(),['VisionSuperBrand','m']);assert.equal(manual.find(m=>m.id==='VisionSuperBrand').catalogPresent,false);
 });
 test('v1 ciphertext and effective role fallbacks migrate byte-for-byte and stay decryptable',async()=>{
   const m=await modules(),cipher=await legacyCipher(secret,'synthetic-old-key');insertLegacy(m.db,cipher,{text:'Text-B',catalog:[{id:'User-Alias'}]});
