@@ -1,4 +1,4 @@
-import { AlignmentType, BorderStyle, Document, ImageRun, Math as WordMath, MathFraction, MathRadical, MathRoundBrackets, MathRun, MathSubScript, MathSuperScript, Packer, Paragraph, Table, TableCell, TableLayoutType, TableRow, TextRun, WidthType, type MathComponent, type ParagraphChild } from "docx";
+import { AlignmentType, BorderStyle, Document, ImageRun, LineRuleType, Math as WordMath, MathFraction, MathRadical, MathRoundBrackets, MathRun, MathSubScript, MathSuperScript, Packer, Paragraph, Table, TableCell, TableLayoutType, TableRow, TextRun, WidthType, type MathComponent, type ParagraphChild } from "docx";
 import JSZip from "jszip";
 import { splitMathText } from "./math-text";
 import { needsWordMathEquation, normalizeMathNotation } from "./math-notation.mjs";
@@ -12,6 +12,8 @@ const typeOrder = ["单选题", "多选题", "填空题", "判断题", "解答�
 const typeNames: Record<string, string> = { 单选题: "单项选择题", 多选题: "多项选择题", 填空题: "填空题", 判断题: "判断题", 解答题: "解答题" };
 const sectionNumbers = ["一", "二", "三", "四", "五"];
 const optionLabels = ["A", "B", "C", "D", "E", "F"];
+// Explicit automatic line rules let office renderers grow lines around native
+// fractions and inline images instead of clipping them to an ambiguous fixed line.
 const BODY_SIZE = 21;
 // Use the local Mac's system Song typeface for Chinese and Times New Roman for Latin/math text.
 const BODY_FONT = { ascii: "Times New Roman", hAnsi: "Times New Roman", eastAsia: "Songti SC", cs: "Times New Roman", hint: "eastAsia" } as const;
@@ -153,7 +155,7 @@ function optionTable(options: string[], compact = false) {
       cells.push(new TableCell({
         width: { size: cellWidth, type: WidthType.DXA },
         margins: { top: compact ? 0 : 40, bottom: compact ? 40 : 80, left: 180, right: 120 },
-        children: [new Paragraph({ spacing: { line: compact ? 300 : 360 }, children: option == null ? [] : [...textRuns(`${optionLabels[index]}．`), ...richText(option)] })],
+        children: [new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, line: compact ? 300 : 360 }, children: option == null ? [] : [...textRuns(`${optionLabels[index]}．`), ...richText(option)] })],
       }));
     }
     rows.push(new TableRow({ children: cells }));
@@ -181,7 +183,7 @@ async function imageParagraphFromSource(source: string, resolveImage: (source: s
   });
   const scale = Math.min(1, maxWidth / dimensions.width, maxHeight / dimensions.height);
   const width = Math.round(dimensions.width * scale); const height = Math.round(dimensions.height * scale);
-  return new Paragraph({ alignment, spacing: { before, after }, children: [new ImageRun({ data, type, transformation: { width, height } })] });
+  return new Paragraph({ alignment, spacing: { lineRule: LineRuleType.AUTO, line: 240, before, after }, children: [new ImageRun({ data, type, transformation: { width, height } })] });
 }
 
 export async function buildQuestionsWordBlob(questions: Question[], title: string, includeAnswers: boolean) {
@@ -195,8 +197,8 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
     imageParagraphFromSource(source, resolveImage, maxWidth, maxHeight, after, alignment, before);
   const rawParagraphs: Array<{ token: string; xml: string; assets?: Record<string, string>; questionNumber?: number }> = [];
   const children: Array<Paragraph | Table> = [
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns(title, 30, { bold: true }) }),
-    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 300 }, children: textRuns("姓名：____________　班级：____________　得分：____________") }),
+    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { lineRule: LineRuleType.AUTO, after: 240 }, children: textRuns(title, 30, { bold: true }) }),
+    new Paragraph({ alignment: AlignmentType.CENTER, spacing: { lineRule: LineRuleType.AUTO, after: 300 }, children: textRuns("姓名：____________　班级：____________　得分：____________") }),
   ];
   let number = 1;
   let sectionIndex = 0;
@@ -204,7 +206,7 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
   for (const type of typeOrder) {
     const group = questions.filter((question) => question.type === type);
     if (!group.length) continue;
-    children.push(new Paragraph({ spacing: { before: 180, after: 120 }, children: textRuns(`${sectionNumbers[sectionIndex]}、${typeNames[type]}（共${group.length}题）`, BODY_SIZE, { bold: true }) }));
+    children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, before: 180, after: 120 }, children: textRuns(`${sectionNumbers[sectionIndex]}、${typeNames[type]}（共${group.length}题）`, BODY_SIZE, { bold: true }) }));
     sectionIndex += 1;
     for (const question of group) {
       renderedQuestions.push(question);
@@ -219,9 +221,9 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
           children.push(new Paragraph({ children: textRuns(token) }));
         });
       } else {
-        const stem = new Paragraph({ spacing: { after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100, line: compactConclusion ? 300 : 360 }, children: [...textRuns(`${number}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText(stemParagraphs[0] ?? question.stem)] });
+        const stem = new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, after: compactConclusion ? 0 : stemParagraphs.length > 1 ? 40 : 100, line: compactConclusion ? 300 : 360 }, children: [...textRuns(`${number}．`), ...textRuns(source, BODY_SIZE, { color: "2478A8" }), ...richText(stemParagraphs[0] ?? question.stem)] });
         children.push(stem);
-        for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ indent: { left: 420 }, spacing: { after: compactConclusion ? 0 : 40, line: compactConclusion ? 300 : 360 }, children: richText(continuation) }));
+        for (const continuation of stemParagraphs.slice(1)) children.push(new Paragraph({ indent: { left: 420 }, spacing: { lineRule: LineRuleType.AUTO, after: compactConclusion ? 0 : 40, line: compactConclusion ? 300 : 360 }, children: richText(continuation) }));
       }
       const imageLayout = resolveQuestionImageLayout(question);
       if (images.length && compactConclusion) {
@@ -242,19 +244,19 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
         });
       } else if (question.options.length) {
         children.push(optionTable(question.options, compactConclusion));
-        children.push(new Paragraph({ spacing: { after: 80 }, children: textRuns("　") }));
+        children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, after: 80 }, children: textRuns("　") }));
       } else {
         const answerLines = question.type === "解答题" ? 5 : 1;
-        for (let i = 0; i < answerLines; i += 1) children.push(new Paragraph({ spacing: { after: 180 }, children: textRuns("　") }));
+        for (let i = 0; i < answerLines; i += 1) children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, after: 180 }, children: textRuns("　") }));
       }
       number += 1;
     }
   }
   if (includeAnswers) {
-    children.push(new Paragraph({ pageBreakBefore: true, alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns(title, 30, { bold: true }) }));
-    children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 240 }, children: textRuns("参考答案与试题解析", BODY_SIZE, { bold: true }) }));
+    children.push(new Paragraph({ pageBreakBefore: true, alignment: AlignmentType.CENTER, spacing: { lineRule: LineRuleType.AUTO, after: 240 }, children: textRuns(title, 30, { bold: true }) }));
+    children.push(new Paragraph({ alignment: AlignmentType.CENTER, spacing: { lineRule: LineRuleType.AUTO, after: 240 }, children: textRuns("参考答案与试题解析", BODY_SIZE, { bold: true }) }));
     renderedQuestions.forEach((question, index) => {
-      children.push(new Paragraph({ spacing: { after: 80, line: 360 }, children: [...textRuns(`${index + 1}．答案：`, BODY_SIZE, { bold: true }), ...richText(question.answer || "略", { bold: true })] }));
+      children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, after: 80, line: 360 }, children: [...textRuns(`${index + 1}．答案：`, BODY_SIZE, { bold: true }), ...richText(question.answer || "略", { bold: true })] }));
       if (question.analysis) {
         const originalParagraphs = question.analysis.split(/\r?\n/).filter((line) => line.length > 0);
         if (question.analysisDocxXml?.length) {
@@ -264,15 +266,15 @@ export async function buildQuestionsWordBlob(questions: Question[], title: strin
             children.push(new Paragraph({ children: textRuns(token) }));
           });
         } else if (originalParagraphs[0]?.startsWith("【")) {
-          originalParagraphs.forEach((line, lineIndex) => children.push(new Paragraph({ spacing: { after: lineIndex === originalParagraphs.length - 1 ? 180 : 40, line: 360 }, children: richText(line) })));
+          originalParagraphs.forEach((line, lineIndex) => children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, after: lineIndex === originalParagraphs.length - 1 ? 180 : 40, line: 360 }, children: richText(line) })));
         } else {
-          children.push(new Paragraph({ spacing: { after: 180, line: 360 }, children: [...textRuns("解析："), ...richText(question.analysis)] }));
+          children.push(new Paragraph({ spacing: { lineRule: LineRuleType.AUTO, after: 180, line: 360 }, children: [...textRuns("解析："), ...richText(question.analysis)] }));
         }
       }
     });
   }
   const doc = new Document({
-    styles: { default: { document: { run: { font: BODY_FONT, size: BODY_SIZE }, paragraph: { spacing: { line: 360, after: 0 } } } } },
+    styles: { default: { document: { run: { font: BODY_FONT, size: BODY_SIZE }, paragraph: { spacing: { lineRule: LineRuleType.AUTO, line: 360, after: 0 } } } } },
     sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1080, right: 1080, bottom: 1080, left: 1080 } } }, children }],
   });
   const packedBlob = await Packer.toBlob(doc);
