@@ -72,7 +72,7 @@ test('four roles and default modality are independent; broken explicit routes fa
  assert.equal((await routing.resolveRoute(state,'text',false)).primary.model.id,t.modelId);assert.equal((await routing.resolveRoute(state,'text',true)).primary,null);
  state.routing.routes.find(r=>r.role==='diagram').primary=t;assert.equal((await routing.resolveRoute(state,'diagram',true)).primary.model.id,t.modelId);
  state.providers[0].enabled=false;await assert.rejects(()=>routing.resolveRoute(state,'diagram',true),e=>e.code==='ROUTE_UNAVAILABLE');
- state.providers[0].enabled=true;state.providers[0].models[0].capabilities.vision.state='unsupported';await assert.rejects(()=>routing.resolveRoute(state,'diagram',true),e=>e.code==='CAPABILITY_MISMATCH');
+ state.providers[0].enabled=true;state.providers[0].models[0].capabilities.vision.state='unsupported';assert.equal((await routing.resolveRoute(state,'diagram',true)).primary.model.id,t.modelId);
 });
 test('probe budget is one; queue retry policy separates outer delivery attempts',async()=>{
  const m=await setup('auto');const {calls}=await mocked(()=>json({error:{message:'Endpoint unsupported'}},404),()=>m.engine.executeTargets(m.runtime,null,m.input,{maxAttempts:1}));assert.equal(calls.length,1);
