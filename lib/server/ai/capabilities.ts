@@ -1,5 +1,4 @@
 import type { CapabilityEvidence, CapabilityName, CapabilityState, ModelCapabilities, ProviderConfig, ProviderModel } from '../../ai-provider-types';
-import { ProviderError } from './errors';
 export const CAPABILITIES = ['text', 'vision', 'structured'] as const;
 export function unknownCapabilities(source: CapabilityEvidence['source'] = 'manual'): ModelCapabilities {
     return Object.fromEntries(CAPABILITIES.map(name => [name, { state: 'unknown', source, observedAt: 0, configurationFingerprint: '' }])) as ModelCapabilities;
@@ -8,12 +7,12 @@ export function capabilityState(provider: ProviderConfig, model: ProviderModel, 
     const item = model.capabilities[name];
     return item?.configurationFingerprint === provider.fingerprint ? item.state : 'unknown';
 }
+/** Capability evidence is descriptive only. It must never block routing or invocation. */
 export function requireCapabilities(provider: ProviderConfig, model: ProviderModel, images: boolean, allowLegacy = false) {
-    for (const name of ['text', 'structured', ...(images ? ['vision'] : [])] as CapabilityName[]) {
-        const state = capabilityState(provider, model, name);
-        if (state === 'unsupported' || state === 'unknown' && !(allowLegacy && provider.legacy && model.legacyCompatible))
-            throw new ProviderError('CAPABILITY_MISMATCH', `模型 ${model.id} 的${name === 'vision' ? '图片输入' : name === 'text' ? '文本' : '结构化输出'}能力${state === 'unsupported' ? '不受支持' : '尚未确认，请先测试或明确标注'}。`, 422, 'modelId');
-    }
+    void provider;
+    void model;
+    void images;
+    void allowLegacy;
 }
 export const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const strings = (value: unknown) => Array.isArray(value) ? value.filter((i): i is string => typeof i === 'string' && i.length <= 100).slice(0, 64) : undefined;
