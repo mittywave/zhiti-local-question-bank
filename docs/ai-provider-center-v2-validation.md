@@ -4,7 +4,9 @@
 
 目标仓库：`mittywave/zhiti-local-question-bank`。开发分支：`feature/ai-provider-center-v2`，PR #3。主分支核对基线为 `8ab8dba8e48524a206d245968772b42728b42b96`；本轮接续实现基线为 `e6fc4b381ead6d8fa6a10584030c4f4dd8578b85`。完整需求见同目录 `ai-provider-center-v2-taskbook.md`。
 
-本分支不自动合并 main，不部署生产，不执行远程数据库迁移。以下区分代码覆盖、实测结果和未验证边界，不以 fixture 成功代替真实服务验收。
+最终功能代码：`eb5179423141689fbcac6bcb52528c61c9748c05`；源码树：`e00f59ede7fa09cf0df7178b29b6ada301a1f317`。本说明的后续提交仅整理证据，不改变该功能代码。
+
+状态：已提交开发侧验证，等待仓库所有者最终验收。两套 PR CI 在上述功能提交通过。没有合并 main、部署生产或执行远程数据库迁移。以下区分代码覆盖、实测结果和未验证边界，不以 fixture 成功代替真实服务验收。
 
 ## 本轮补齐
 
@@ -14,9 +16,9 @@
 - 管理错误附带不可回放的 diagnosticId；服务端仅记录编号、稳定错误码、状态，不记录原始异常、正文、Header 或 Key。429 保留 Retry-After。
 - 图片探测改为四张独立合成色块。正确顺序只留在服务端验证函数，不放入提示或 schema。未通过后置校验不会记为成功，也不会触发备用。它仍不是题库视觉质量认证。
 - OpenAI 兼容 Chat 仅在明确不支持 max_completion_tokens 时尝试有界 max_tokens 兼容，保留同样输出上限和总预算。非 JSON 的 429 保持限流分类，不轮换提供方。
-- 模型编辑中不能再次点击新增/编辑覆盖未保存表单。保留取消、dirty、焦点和键盘确认操作。
-- 作业 E2E 的数据库观察改为实际本地 D1 SQLite 的只读查询，避免每次断言/清理轮询额外启动 Wrangler/workerd。保留全部作业、队列、权限、清理和 404 断言，不扩大超时或删除断言。
-- Word 从真实网页下载后，使用独立 LibreOffice profile 转 PDF，再渲染每页 PNG。验证文件、页数与可提取正文，保留 PDF、PNG、文本与哈希报告供逐页检查。
+- 模型编辑中不能再次点击新增/编辑覆盖未保存表单。保留取消、dirty、焦点和键盘确认操作；保存栏回归文档流，修复手机任务分配中浮动栏遮挡字段的问题。
+- 作业 E2E 的数据库观察改为实际本地 D1 SQLite 的只读查询，避免每次断言/清理轮询额外启动 Wrangler/workerd。该修正单独使用不足以消除热重载代理超时；最终由 `scripts/start-local-test-worker.mjs` 直接运行相同的 Vinext 编译产物和锁文件中的 Miniflare/workerd，使用真实本地 D1、R2、队列，去除长流程中非业务的 Wrangler 热重载反向代理。全部作业、队列、权限、清理和 404 断言及 HTTP 超时保持原样；公共/个人题库 E2E 同样使用该运行器。浏览器套件仍独立验证实际 `wrangler dev`，未将应用 API 或数据库换成 mock。
+- Word 从真实网页下载后，使用独立 LibreOffice profile 转 PDF，再渲染每页 PNG。逐页检查发现原生成段落的行高会裁切分数和内联图片，已在 `lib/export-word.ts` 明确使用 AUTO 行高，并为图片保留可伸展单行。新增实际 DOCX 构造器回归测试；原生 OMML、表格、图片及原始导入 Word 段落保持。最终两浏览器重新下载的四页均已逐页查看。
 
 ## 验证结果与证据
 
@@ -27,13 +29,44 @@
 | 依赖 | GitHub 隔离 workspace 的 npm ci 成功，锁文件未改 | 本地使用该锁文件对应依赖归档；未伪称本机在线 npm ci |
 | npm run lint | 通过，0 errors / 17 warnings | 既有 warning 未隐藏 |
 | npm run test:studio | 140/140 通过 | 不替代实际应用浏览器 |
-| V2 专项测试 | 54/54 通过 | SQLite + 合成上游，非真实 AI |
+| V2 + Word 新增相关专项 | 55/55 通过（V2 54 + Word 1） | SQLite + 合成上游；Word 用实际构造器，非真实 AI |
 | npm run benchmark:studio | 通过 | 请求数与并发断言保留 |
 | npm test（本轮首轮） | 最终通过 | 337 项普通回归通过；作业 E2E 首次通过；scoped-library E2E 首次 GET /api/students 超时，既有单次重试通过，不能称首次全绿 |
-| tsc --noEmit | 未通过 | 基线和修改后均 237 个诊断，按文件/错误内容去掉行号比较，新增 0 / 消失 0；包含既有 Cloudflare 类型声明问题 |
+| tsc --noEmit | 未通过，exit 2 | 接手基线 e6fc4b3 和最终代码均 237 个诊断；4 处同样缺失 D1Database 的提示由 TS2304 改成附 IDBDatabase 建议的 TS2552，其余去掉行号后相同。不是全量类型检查通过，也不能据此声称 V2 相对原 main 没有类型问题 |
 | 本机 Chromium | 未通过环境导航 | ERR_BLOCKED_BY_ADMINISTRATOR；未关闭浏览器安全策略，改用仓库 Actions 的实际浏览器验收 |
 
-最终 CI、三次无整轮重试的作业稳定性测试、Chromium/WebKit 与 Word 逐页视觉结果，应以本次提交关联的 Actions 和最终补充记录为准。尚未取得的结果不能由本表推断为成功。
+### 首轮与修正记录
+
+- 隔离核对运行 `36301778290`、`36301947682`：补丁树校验、lint、Studio、benchmark、全量回归通过，但额外连续作业检查仍出现 `/api/homework-assets/<id>` 请求超时；后续浏览器和 Word 步骤被跳过。这两轮不是最终验收通过。
+- 调查已安装 Wrangler 的 `ProxyWorker` GET 失败重排队路径后，将长流程套件改为直接 Miniflare/workerd；没有修改生产 Worker、跳过权限/404 检查、扩大超时或添加“失败也通过”。直接运行器仍使用编译后的真实应用，以及同一隔离状态目录中的真实 D1/R2/队列，不使用远程绑定或真实凭据。
+- 最终直接运行器在本机的 homework、scoped-library 两个完整流程均首轮通过。最终 CI 和视觉结果见下方，不以这些本地结果推断浏览器成功。
+
+### 最终功能提交的 CI（2026-09-27 UTC）
+
+- [Math and recognition regression — 36303548850](https://github.com/mittywave/zhiti-local-question-bank/actions/runs/36303548850)：regression 与 browser 均 success。
+- [AI Provider V2 validation — 36303548849](https://github.com/mittywave/zhiti-local-question-bank/actions/runs/36303548849)：validation success。
+
+| 最终检查 | 实际结果 |
+|---|---|
+| npm ci / lint / Studio / benchmark | 通过；Studio 140 项，lint 保留既有 warnings |
+| npm test | 340 项普通回归 + 1 个完整作业 E2E + 1 个完整公共/个人题库 E2E 通过；该轮日志无 not ok、整轮重试或跳过 |
+| 三次独立作业 E2E | 第 1、2、3 次分别 pass 1 / fail 0 / skipped 0，无失败重跑 |
+| 真实 Chromium / WebKit | 两者通过；每种浏览器 390、768、1440px × 深浅两主题，共 12 个组合 |
+| 四类真实业务路径 | recognition/text/diagram 在浏览器的真实 Worker/D1 路径检查；grading 在实际本地 D1/R2/队列 E2E 中检查；只有外部 AI 是合成服务 |
+| Word | 两浏览器各实际下载 1 个 DOCX；每个含 7 个原生数学对象、2 张表格和 1 个图片部件；每份渲染 2 页，全部 4 页已逐页查看 |
+| 独立 TypeScript | 仍有上述 237 项诊断，明确未通过 |
+
+证据：Math 运行的 `studio-browser-results` artifact（ID `10926810513`）包含 `ai-settings-browser-results/browser-results.json`、各浏览器截图、原始 DOCX、`word-pages/rendered.pdf`、`page-1.png`、`page-2.png`、`render-report.json`。V2 运行的 `ai-v2-validation-logs` artifact（ID `10926586587`）包含完整回归及三个独立作业日志。Actions 保留 7 天，应及时下载保留。
+
+### 逐页视觉核对与前后证据
+
+实际查看最终 Chromium 与 WebKit 的 Word 两页：题干、选项及解析中的分子/分母完整，三角形图片完整，不再裁成横条；字体、表格和图片位置未出现本次样例可见的裁切。渲染器为 LibreOffice 24.2.7.2；Linux 字体替代不是 Mac Word/WPS 认证。
+
+实际查看最终 `routing-dark-390.png`：保存栏位于任务配置之后，未覆盖标签或输入框；查看 WebKit `models-dark-390.png` 与 Chromium `models-light-1440.png`：获取/添加模型按钮文字可辨认，模型能力来源和 unknown 状态清楚。完整 12 组主题/尺寸截图均保存在 artifact，不能把仅 DOM 断言当视觉验收。
+
+本轮补齐前 e6fc4b3 的截图来源是运行 [36296284989](https://github.com/mittywave/zhiti-local-question-bank/actions/runs/36296284989) 的浏览器 artifact；这是“本轮补齐前”，不是旧 main 的页面。核心实现中间运行 `36302487928` 的旧 Word 渲染出现裁切、手机保存栏存在遮挡；最终功能提交重新导出、渲染并检查后修复。不要拿中间渲染成功冒充最终视觉通过。
+
+中间 CI `36302487928` 的全部应用检查已通过，但最后 Git 对象归档步骤失败；恢复运行 `36303027900` 遇 Actions token 写树权限限制。之后通过仓库连接器提交了相同校验树，并追加 Word/手机布局修复，最终由上述两套标准 CI 重新验证。两份临时 provisioning/recovery workflow 已从最终分支删除，没有自动部署或合并。
 
 常规持续验证：
 
@@ -80,7 +113,7 @@ Provider revision、全局 configuration revision、带 CHECK 的 write guard �
 
 `npm run dev` 执行本地迁移，不操作远程 D1。建议单独克隆或使用独立工作树/本地数据库备份，避免试验影响日常题库。项目规则以 AGENTS.md 为准。
 
-自建网关需在私密 `.env.local` 配置 `AI_PROVIDER_ALLOWED_BASES`，值为逗号分隔的可信 HTTPS 地址，尽量限定租户/部署前缀。`npm run dev` 同步这些设置到私密 `.dev.vars`。本地开发默认密钥只用于本地；保留原 `AI_PROVIDER_ENCRYPTION_KEY`，不要为了升级生成新 Secret 导致旧 Key 无法解密。
+.env.example 已说明相关服务器配置。自建网关需在私密 `.env.local` 配置 `AI_PROVIDER_ALLOWED_BASES`，值为逗号分隔的可信 HTTPS 地址，尽量限定租户/部署前缀。`npm run dev` 同步这些设置到私密 `.dev.vars`。本地开发默认密钥只用于本地；保留原 `AI_PROVIDER_ENCRYPTION_KEY`，不要为了升级生成新 Secret 导致旧 Key 无法解密。
 
 本地回归：
 
