@@ -246,10 +246,17 @@ export async function saveCatalog(id: string, expectedFingerprint: string, model
     const state = await readCenter(), provider = findProvider(state, id);
     if (provider.fingerprint !== expectedFingerprint)
         conflict('连接配置已变化，已丢弃过期目录结果。');
-    const merged = mergeCatalog(provider.models, models, expectedFingerprint);
+    const referenced = new Set(referencedTargets(state.routing).filter(t => t.providerId === id).map(t => t.modelId));
+    const merged = mergeCatalog(provider.models, models, expectedFingerprint, referenced);
     if (merged.length > 1500)
         invalid('目录超过 1500 项，请缩小上游分组。');
-    await atomic(state.routing.revision, [modelWrite(id, merged)]);
+    // Keep the database aligned with the latest upstream snapshot. Models that
+    // vanished upstream are removed unless they are manual or still referenced.
+    const keptIds = JSON.stringify(merged.map(model => model.id));
+    await atomic(state.routing.revision, [
+        modelWrite(id, merged),
+        stmt("DELETE FROM ai_provider_models WHERE provider_id=? AND model_id NOT IN (SELECT value FROM json_each(?))", id, keptIds),
+    ]);
     return findProvider(await readCenter(), id);
 }
 export async function saveManualModel(id: string, value: unknown) {
