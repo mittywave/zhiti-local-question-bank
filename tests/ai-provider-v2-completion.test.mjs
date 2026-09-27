@@ -26,6 +26,16 @@ for (const [mode, protocol, suffix] of [
   assert.equal(custom.endpoints.models, 'tenant-catalog');
 });
 
+test('custom public HTTPS providers work immediately without a server allowlist', async () => {
+  const {assertTrustedDestination} = await loadSource('lib/server/ai/endpoint-policy.ts', {LOCAL_ADMIN_MODE:'false'});
+  assert.equal(assertTrustedDestination('https://gateway.example.com/tenant/v1'), 'https://gateway.example.com/tenant/v1');
+  assert.equal(assertTrustedDestination('https://another-provider.example/api'), 'https://another-provider.example/api');
+  assert.throws(() => assertTrustedDestination('http://gateway.example.com/v1'), error => error.code === 'DESTINATION_NOT_ALLOWED');
+  assert.throws(() => assertTrustedDestination('https://127.0.0.1/v1'), error => error.code === 'DESTINATION_NOT_ALLOWED');
+  assert.throws(() => assertTrustedDestination('https://10.20.30.40/v1'), error => error.code === 'DESTINATION_NOT_ALLOWED');
+  assert.throws(() => assertTrustedDestination('https://metadata.google.internal/v1'), error => error.code === 'DESTINATION_NOT_ALLOWED');
+});
+
 test('DeepSeek Responses has an explicit field allowlist, not inherited OpenAI options', async () => {
   const {deepSeekBody} = await loadSource('lib/server/ai/adapters/deepseek.ts');
   const ctx = { provider:{reasoningEffort:'max'}, model:{id:'Dynamic-ID'}, input:{prompt:'p',schema:{type:'object'},schemaName:'s',images:['data:image/png;base64,AA=='],maxTokens:123}, options:{format:'schema',reasoning:true,effort:'high'}};
@@ -57,7 +67,7 @@ test('effort is resolved for the actual model and wire, including official alias
 
 async function repository() {
   const db=sqliteD1();
-  const env={DB:db,LOCAL_ADMIN_MODE:'true',AI_PROVIDER_ENCRYPTION_KEY:'synthetic-completion-key',AI_PROVIDER_ALLOWED_BASES:'https://fixture.invalid'};
+  const env={DB:db,LOCAL_ADMIN_MODE:'true',AI_PROVIDER_ENCRYPTION_KEY:'synthetic-completion-key'};
   const repo=await loadSource('lib/server/ai/provider-repository.ts',env);
   const presets=await loadSource('lib/ai-provider-presets.ts');
   const capabilities=await loadSource('lib/server/ai/capabilities.ts');
