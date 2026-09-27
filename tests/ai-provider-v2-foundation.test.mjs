@@ -68,12 +68,10 @@ test('simultaneous provider writes have one winner and one 409, not lost updates
   const results=await Promise.allSettled(changes);assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.equal(results.find(r=>r.status==='rejected').reason.code,'REVISION_CONFLICT');
   assert.equal((await m.repo.readCenter()).providers[0].revision,2);assert.equal(m.db.sqlite.prepare('SELECT count(*) AS n FROM ai_v2_write_guard').get().n,0);
 });
-test('task routes validate capability, block referenced deletion, and preserve whole-snapshot versions',async()=>{
+test('task routes ignore capability labels, block referenced deletion, and preserve whole-snapshot versions',async()=>{
   const m=await modules(),p=await m.repo.saveProvider(null,input(m.presets));let state=await m.repo.readCenter();
-  await m.repo.saveManualModel(p.id,{id:'M',expectedRevision:p.revision,expectedConfigurationRevision:state.routing.revision,capabilities:{text:'supported',vision:'unsupported',structured:'supported'}});
+  await m.repo.saveManualModel(p.id,{id:'M',expectedRevision:p.revision,expectedConfigurationRevision:state.routing.revision,capabilities:{text:'unknown',vision:'unsupported',structured:'unknown'}});
   state=await m.repo.readCenter();const next=structuredClone(state.routing);next.routes.find(r=>r.role==='recognition').primary={providerId:p.id,modelId:'M'};
-  await assert.rejects(()=>m.repo.saveRouting(next),e=>e.code==='CAPABILITY_MISMATCH');
-  next.routes.find(r=>r.role==='recognition').primary=null;next.routes.find(r=>r.role==='text').primary={providerId:p.id,modelId:'M'};
   const saved=await m.repo.saveRouting(next);assert.equal(saved.revision,next.revision+1);
   await assert.rejects(()=>m.repo.saveRouting(next),e=>e.code==='REVISION_CONFLICT');await assert.rejects(()=>m.repo.deleteProvider(p.id,p.revision),e=>e.code==='PROVIDER_IN_USE');
   await assert.rejects(()=>m.repo.saveProvider(p.id,input(m.presets,{...p,enabled:false,expectedRevision:p.revision,credential:{action:'keep'}})),e=>e.code==='PROVIDER_IN_USE');
