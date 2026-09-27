@@ -3,7 +3,6 @@ import { readAiBody } from '../ai-http';
 import { errorResponse, ProviderError } from './errors';
 export async function adminRequest(request: Request, write = false) {
     if (write) {
-        requireSameOrigin(request);
         const origin = request.headers.get('origin');
         if (origin) {
             let valid = false;
@@ -15,6 +14,7 @@ export async function adminRequest(request: Request, write = false) {
                 throw new ProviderError('FORBIDDEN', '请求来源不受信任。', 403);
         }
     }
+    if (write) requireSameOrigin(request);
     const user = await requireUser(request);
     if (user.role !== 'admin')
         throw new ProviderError('FORBIDDEN', '仅管理员可管理 AI 配置。', 403);
