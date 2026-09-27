@@ -1,3 +1,4 @@
+import { AiQueueFailure, queueRetryDelay } from "./ai/queue-policy";
 import { env } from "cloudflare:workers";
 import { buildHomeworkGradingPrompt, buildSubmissionReportPrompt, homeworkGradingSchema, normalizeHomeworkGrading, normalizeHomeworkReport, submissionReportSchema } from "../homework-grading-contract";
 import { CAPABILITY_FRAMEWORK_VERSION } from "../homework-capability-framework.mjs";
@@ -56,7 +57,7 @@ async function processingSubmission(submissionId: string) {
     .bind(submissionId).first<SubmissionRow>();
 }
 
-export async function generateSubmissionReport(submissionId: string) {
+export async function generateSubmissionReport(submissionId: string, upperAttempt = 1) {
   const owner = await homeworkDb().prepare(`SELECT homework_assignments.owner_user_id FROM homework_submissions
     JOIN homework_assignments ON homework_assignments.id = homework_submissions.assignment_id WHERE homework_submissions.id = ?`)
     .bind(submissionId).first<{ owner_user_id: string }>();
@@ -67,7 +68,7 @@ export async function generateSubmissionReport(submissionId: string) {
   let report = fallback;
   try {
     const result = await callHomeworkModel({ images: [], prompt: buildSubmissionReportPrompt(submission.gradingItems),
-      schema: submissionReportSchema, schemaName: "homework_submission_report" });
+      schema: submissionReportSchema, schemaName: "homework_submission_report", upperAttempt });
     if (result.text) report = normalizeHomeworkReport(parseHomeworkModelText(result.text));
   } catch { /* Deterministic fallback keeps the automatic pipeline available. */ }
   const { saveSubmissionReport } = await import("./homework-capabilities");
@@ -75,7 +76,7 @@ export async function generateSubmissionReport(submissionId: string) {
   return report;
 }
 
-async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
+async function finalizeSubmissionIfComplete(submission: SubmissionRow, upperAttempt = 1) {
   const counts = await homeworkDb().prepare(`SELECT
       (SELECT COUNT(*) FROM assignment_questions WHERE assignment_id = ?) AS question_count,
       (SELECT COUNT(*) FROM grading_items WHERE submission_id = ?) AS result_count,
@@ -97,14 +98,14 @@ async function finalizeSubmissionIfComplete(submission: SubmissionRow) {
     WHERE id = ? AND status IN ('submitted', 'processing', 'failed')`).bind(now, submission.id).run();
   if (!claimed.meta.changes) return true;
   if (autoPublishEnabled()) {
-    await generateSubmissionReport(submission.id);
+    await generateSubmissionReport(submission.id, upperAttempt);
     const { autoPublishSubmission } = await import("./homework");
     await autoPublishSubmission(submission.id);
   }
   return true;
 }
 
-export async function processHomeworkSubmissionPage(submissionId: string, pageNumberValue: number) {
+export async function processHomeworkSubmissionPage(submissionId: string, pageNumberValue: number, upperAttempt = 1) {
   const submission = await processingSubmission(submissionId);
   if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
   const pageNumber = Math.max(1, Math.min(200, Math.floor(Number(pageNumberValue) || 1)));
@@ -115,7 +116,7 @@ export async function processHomeworkSubmissionPage(submissionId: string, pageNu
     FROM assignment_questions WHERE assignment_id = ? AND page_number = ? ORDER BY sort_order`)
     .bind(submission.assignment_id, pageNumber).all<QuestionRow>();
   const questions = questionsResult.results;
-  if (!questions.length) { await finalizeSubmissionIfComplete(submission); return; }
+  if (!questions.length) { await finalizeSubmissionIfComplete(submission, upperAttempt); return; }
 
   for (const question of questions) {
     if (!question.answer.trim()) await upsertResult({ submissionId, question, pageId: null, verdict: "unreadable", studentAnswer: "",
@@ -138,9 +139,11 @@ export async function processHomeworkSubmissionPage(submissionId: string, pageNu
       const images = await Promise.all([homeworkAssetDataUrl(template.asset_id), homeworkAssetDataUrl(studentPage.processed_asset_id)]);
       const result = await callHomeworkModel({ images, prompt: buildHomeworkGradingPrompt(pageNumber, gradeable.map((question) => ({
         questionNumber: question.question_number, type: question.type, stem: question.stem, answer: question.answer, analysis: question.analysis,
-      }))), schema: homeworkGradingSchema, schemaName: "homework_page_grading" });
-      if (!result.text) throw new Error(result.error || `第 ${pageNumber} 页批改失败`);
-      const extracted = normalizeHomeworkGrading(parseHomeworkModelText(result.text));
+      }))), schema: homeworkGradingSchema, schemaName: "homework_page_grading", upperAttempt });
+      if (!result.text) throw new AiQueueFailure(result);
+      let extracted;
+      try { extracted = normalizeHomeworkGrading(parseHomeworkModelText(result.text)); }
+      catch { throw new AiQueueFailure({ code: "OUTPUT_INVALID", status: 422, error: "批改结果未通过业务校验，未自动重复请求。" }); }
       for (const question of gradeable) {
         const item = extracted.find((candidate) => candidate.question_number === question.question_number);
         if (!item) {
@@ -156,17 +159,17 @@ export async function processHomeworkSubmissionPage(submissionId: string, pageNu
       }
     }
   }
-  await finalizeSubmissionIfComplete(submission);
+  await finalizeSubmissionIfComplete(submission, upperAttempt);
 }
 
-export async function processHomeworkSubmission(submissionId: string) {
+export async function processHomeworkSubmission(submissionId: string, upperAttempt = 1) {
   const submission = await processingSubmission(submissionId);
   if (!submission || !["submitted", "processing", "failed"].includes(submission.status)) return;
   try {
     const pages = await homeworkDb().prepare("SELECT DISTINCT page_number FROM assignment_questions WHERE assignment_id = ? ORDER BY page_number")
       .bind(submission.assignment_id).all<{ page_number: number }>();
-    for (const page of pages.results) await processHomeworkSubmissionPage(submissionId, Number(page.page_number));
-    await finalizeSubmissionIfComplete(submission);
+    for (const page of pages.results) await processHomeworkSubmissionPage(submissionId, Number(page.page_number), upperAttempt);
+    await finalizeSubmissionIfComplete(submission, upperAttempt);
   } catch (error) {
     await homeworkDb().prepare("UPDATE homework_submissions SET status = 'failed', failure_reason = ?, updated_at = ? WHERE id = ?")
       .bind(error instanceof Error ? error.message.slice(0, 500) : "批改失败", Date.now(), submissionId).run();
@@ -192,15 +195,17 @@ export async function processHomeworkQueue(batch: QueueBatch) {
     if (!cleanup && !grading) { message.ack(); continue; }
     try {
       if (cleanup) await processHomeworkAssetCleanup(jobId!);
-      else if (kind === "grade_submission_page") await processHomeworkSubmissionPage(submissionId!, Number(message.body.pageNumber));
-      else if (kind === "recompute_submission_report") await generateSubmissionReport(submissionId!);
-      else await processHomeworkSubmission(submissionId!);
+      else if (kind === "grade_submission_page") await processHomeworkSubmissionPage(submissionId!, Number(message.body.pageNumber), message.attempts);
+      else if (kind === "recompute_submission_report") await generateSubmissionReport(submissionId!, message.attempts);
+      else await processHomeworkSubmission(submissionId!, message.attempts);
       message.ack();
     } catch (error) {
       const attempts = Math.max(1, Number(message.attempts) || 1);
-      if (cleanup) await recordHomeworkAssetCleanupFailure(jobId!, error, attempts >= maxQueueAttempts());
-      else if (attempts >= maxQueueAttempts()) await recordFinalQueueFailure(submissionId!, error);
-      message.retry({ delaySeconds: Math.min(300, retryBaseSeconds() * 2 ** Math.max(0, attempts - 1)) });
+      const delay = queueRetryDelay(error, attempts, maxQueueAttempts(), retryBaseSeconds());
+      if (cleanup) await recordHomeworkAssetCleanupFailure(jobId!, error, delay === null);
+      else if (delay === null) await recordFinalQueueFailure(submissionId!, error);
+      if (delay === null) message.ack();
+      else message.retry({ delaySeconds: delay });
     }
   }
 }

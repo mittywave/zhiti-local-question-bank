@@ -4,29 +4,26 @@ on:
     branches: [feature/ai-provider-center-v2]
   pull_request:
     branches: [main]
-    paths:
-      - 'app/settings/ai/**'
-      - 'app/api/admin/ai-*/**'
-      - 'lib/ai-*'
-      - 'lib/server/ai*/**'
-      - 'lib/server/ai*.ts'
-      - 'migrations/*ai*'
-      - 'tests/*ai*'
-      - 'scripts/*ai*'
-      - '.github/workflows/ai-provider-v2-validation.yml'
 permissions:
   contents: read
 concurrency:
   group: ai-provider-v2-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  baseline:
+  validation:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Archive exact public source for review
+        run: git archive HEAD | gzip > /tmp/ai-v2-source.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-v2-source
+          path: /tmp/ai-v2-source.tar.gz
+          retention-days: 7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -36,16 +33,3 @@ jobs:
       - run: npm run test:studio
       - run: npm test
       - run: npm run benchmark:studio
-  browser-bootstrap:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - run: pip install playwright==1.57.0
-      - name: Download Linux browsers for the offline validation workspace
-        run: PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=debian12-x64 playwright install chromium webkit
-      - run: tar -czf /tmp/ai-v2-browsers.tar.gz -C "$HOME/.cache" ms-playwright
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ai-v2-browsers
-          path: /tmp/ai-v2-browsers.tar.gz
-          retention-days: 2
