@@ -237,11 +237,11 @@ def exercise(page,app,out,upstream):
         page.wait_for_timeout(50)
     assert len(Upstream.calls)==before+1
     button('取消测试').click();Upstream.slow=False;expect(page.get_by_role('status')).to_contain_text('已取消');time.sleep(.3);assert len(Upstream.calls)-before<=1
-    # UI saves routes to three distinct Providers; capability mismatch leaves old revision intact.
+    # UI saves routes without requiring capability confirmation; capability labels are advisory only.
     tab('任务分配');state=app.ok(API);routing=state['routing'];target=lambda p,m:json.dumps({'providerId':p['id'],'modelId':m},separators=(',',':'))
     labels=['截图 / 文件识题、答案转录','文字优化 / 解析','几何图重绘','作业批改']
-    page.get_by_label(labels[0]+'主目标',exact=True).select_option(target(ds,'Manual-Case'));button('保存任务分配').click();expect(page.get_by_role('alert')).to_contain_text('不受支持');assert app.ok(API)['routing']['revision']==routing['revision']
-    for label,p,m in [(labels[0],gm,'Model-A'),(labels[1],ds,'Model-A'),(labels[2],cl,'Claude-Alias'),(labels[3],ds,'Model-A')]:page.get_by_label(label+'主目标',exact=True).select_option(target(p,m))
+    page.get_by_label(labels[0]+'主目标',exact=True).select_option(target(ds,'Manual-Case'))
+    for label,p,m in [(labels[1],ds,'Model-A'),(labels[2],cl,'Claude-Alias'),(labels[3],ds,'Model-A')]:page.get_by_label(label+'主目标',exact=True).select_option(target(p,m))
     button('保存任务分配').click();expect(page.get_by_role('status')).to_contain_text('任务分配已保存');page.screenshot(path=str(out/'routing-dark-1440.png'),full_page=True)
     page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(out/'routing-dark-390.png'),full_page=True);assert page.evaluate('document.documentElement.scrollWidth<=document.documentElement.clientWidth');page.set_viewport_size({'width':1440,'height':1000})
     tab('提供方');page.set_viewport_size({'width':390,'height':844});page.get_by_label('当前提供方',exact=True).select_option(gm['id']);expect(page.get_by_label('Base URL',exact=True)).to_have_value(upstream+'/tenant/antigravity/v1beta');button('切换深浅主题').click();assert page.evaluate('document.documentElement.dataset.theme')=='light';page.screenshot(path=str(out/'connection-light-390.png'),full_page=True);page.set_viewport_size({'width':1440,'height':1000})
@@ -257,7 +257,7 @@ def exercise(page,app,out,upstream):
     write={k:p[k] for k in ['name','kind','baseUrl','wireApi','endpoints','enabled','timeoutMs','catalogTimeoutMs','outputStrategy','reasoningEffort']};write.update(expectedRevision=p['revision'],credential={'action':'keep'})
     assert app.request(API+'/'+p['id'],'PATCH',write)[0]==200;assert app.request(API+'/'+p['id'],'PATCH',write)[0]==409
     assert 'synthetic-browser-provider-key' not in json.dumps(app.ok(API))
-    r.update(permissions=True,dirtyGuard=True,scopeGuard=True,directoryFailureManualModel=True,modelProbe=True,probeCancellation=True,capabilityGuard=True,referenceDeleteGuard=True,revisionConflict=True)
+    r.update(permissions=True,dirtyGuard=True,scopeGuard=True,directoryFailureManualModel=True,modelProbe=True,probeCancellation=True,capabilityAdvisory=True,referenceDeleteGuard=True,revisionConflict=True)
     word_export(page,app,out)
     r['wordExport']=True;r['mobileSelectorAndThemeButton']=True;r['copyWithoutKeyAndDelete']=True;r['referencedDisableConfirmation']=True
     page.goto(app.base+'/settings/ai');expect(page.get_by_role('heading',name='AI 配置中心',exact=True)).to_be_visible();page.screenshot(path=str(out/'connection-final.png'),full_page=True)
