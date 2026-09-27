@@ -1,0 +1,20 @@
+'use client';
+import {useState} from 'react';
+import type {CapabilityName,CapabilityState,ProviderConfig,ProviderModel} from '../../../../lib/ai-provider-types';
+import {time} from './common';
+import css from '../ai-center.module.css';
+const names={text:'文本',vision:'图片',structured:'结构化'};
+const states={unknown:'未确认',supported:'支持',unsupported:'不支持'};
+const sources={manual:'管理员标注',catalog:'目录',probe:'合成探测',legacy:'迁移待确认',documentation:'文档'};
+export function ModelCatalog({provider,busy,discoverBusy,discover,cancel,save,remove,dirtyChange,close}:{provider:ProviderConfig;busy:boolean;discoverBusy:boolean;discover:()=>void;cancel:()=>void;save:(body:unknown)=>Promise<boolean>;remove:(model:ProviderModel)=>void;dirtyChange:(dirty:boolean)=>void;close:()=>void}) {
+  const [search,setSearch]=useState(''),[editing,setEditing]=useState(false),[id,setId]=useState(''),[name,setName]=useState(''),[update,setUpdate]=useState(false);
+  const [caps,setCaps]=useState<Record<CapabilityName,CapabilityState>>({text:'unknown',vision:'unknown',structured:'unknown'});
+  function edit(model?:ProviderModel){setEditing(true);dirtyChange(true);setUpdate(Boolean(model));setId(model?.id||'');setName(model?.displayName||'');setCaps(Object.fromEntries(Object.keys(names).map(n=>[n,model?.capabilities[n as CapabilityName]?.configurationFingerprint===provider.fingerprint?model.capabilities[n as CapabilityName].state:'unknown'])) as Record<CapabilityName,CapabilityState>);}
+  const visible=provider.models.filter(m=>`${m.id} ${m.displayName}`.toLowerCase().includes(search.toLowerCase()));
+  return <section><div className={css.toolbar}><div><h2>模型目录 <span className={css.badge}>{provider.models.length}</span></h2><p className={css.hint}>目录成功不等于推理成功。刷新保留手工及已选模型。</p></div><div className={css.actions}><button disabled={busy||editing} onClick={discover}>{discoverBusy?'获取中…':'获取上游模型'}</button>{discoverBusy&&<button onClick={cancel}>取消获取</button>}<button disabled={busy} onClick={()=>edit()}>添加模型</button></div></div>
+    <label>搜索模型<input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="准确 ID 或展示名"/></label>
+    {editing&&<form className={css.inlineForm} onSubmit={async e=>{e.preventDefault();if(await save({id,displayName:name||id,capabilities:caps,update})){setEditing(false);dirtyChange(false);}}}><fieldset disabled={busy}><h3>{update?'编辑模型证据':'手动添加模型'}</h3><label>模型 ID<input name="modelId" required maxLength={200} readOnly={update} value={id} onChange={e=>setId(e.target.value)}/></label><label>展示名<input maxLength={200} value={name} onChange={e=>setName(e.target.value)}/></label><div className={css.fields}>{Object.entries(names).map(([n,l])=><label key={n}>{l}能力<select aria-label={`${l}能力`} value={caps[n as CapabilityName]} onChange={e=>setCaps({...caps,[n]:e.target.value as CapabilityState})}>{Object.entries(states).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select></label>)}</div><p className={css.hint}>手工标注不代表实测。模型 ID 区分大小写。</p><div className={css.actions}><button type="button" onClick={close}>关闭编辑</button><button data-primary disabled={busy} type="submit">保存模型</button></div></fieldset></form>}
+    {visible.map(m=><article className={css.model} key={m.id}><div className={css.toolbar}><div><code>{m.id}</code>{m.displayName!==m.id&&<p>{m.displayName}</p>}</div><div className={css.actions}><button disabled={busy} onClick={()=>edit(m)}>编辑</button><button disabled={busy||editing} onClick={()=>remove(m)}>删除模型</button></div></div><div className={css.capabilities}>{Object.entries(names).map(([n,l])=>{const e=m.capabilities[n as CapabilityName];const stale=e.configurationFingerprint!==provider.fingerprint;return <span key={n}>{l}：<strong>{states[stale?'unknown':e.state]}</strong><small>{sources[e.source]} · {time(e.observedAt)}{stale&&e.observedAt?' · 已失效':''}</small></span>;})}</div>{!m.catalogPresent&&<p className={css.hint}>本次目录未返回 / 手动模型，保留此 ID。</p>}</article>)}
+    {!visible.length&&<p className={css.empty}>暂无匹配模型。获取目录或手动添加准确 ID。</p>}
+  </section>;
+}
