@@ -36,6 +36,8 @@ for(const [name,payload,status,expected] of [
  ['forbidden',{error:{message:'forbidden'}},403,'UPSTREAM_AUTH_FAILED'],
  ['quota',{error:{code:'insufficient_quota'}},400,'UPSTREAM_QUOTA'],
  ['model',{error:{code:'model_not_found'}},404,'MODEL_NOT_FOUND'],
+ ['Gemini resource missing',{error:{code:404,status:'NOT_FOUND',message:'Requested entity was not found.'}},404,'UPSTREAM_NOT_FOUND'],
+ ['Gemini model missing',{error:{code:404,status:'NOT_FOUND',message:'Model not found'}},404,'MODEL_NOT_FOUND'],
  ['rate',{error:{message:'limited'}},429,'UPSTREAM_RATE_LIMITED'],
  ['invalid schema',{error:{message:'Invalid schema: required is missing'}},400,'UPSTREAM_REJECTED'],
  ['refusal',{output:[{type:'message',content:[{type:'refusal',refusal:'no'}]}]},200,'OUTPUT_INCOMPLETE'],
@@ -84,3 +86,9 @@ test('server postcondition failure never marks a probe successful or triggers a 
 
 test('legacy compatible Chat token limit negotiation preserves the cap and shared budget',async()=>{const m=await setup('chat_completions');const {result,calls}=await mocked((_,n)=>n===1?json({error:{message:'Unsupported parameter max_completion_tokens'}},400):json(good('chat_completions')),()=>m.engine.executeTargets(m.runtime,null,m.input));assert.equal(result.code,'OK');assert.equal(calls.length,2);assert.equal(calls[0].body.max_completion_tokens,32768);assert.equal(calls[1].body.max_tokens,32768);assert.equal('max_completion_tokens' in calls[1].body,false);});
 test('non-JSON 429 retains rate classification and never rotates providers',async()=>{const m=await setup();const {result,calls}=await mocked(()=>new Response('<html>limited</html>',{status:429,headers:{'retry-after':'120'}}),()=>m.engine.executeTargets(m.runtime,m.runtime,m.input));assert.equal(result.code,'UPSTREAM_RATE_LIMITED');assert.equal(result.retryAfter,'120');assert.equal(calls.length,1);});
+
+test('Sub2API JSON resource errors with SSE headers preserve classification without retries',async()=>{
+ const m=await setup('auto');
+ const {result,calls}=await mocked(()=>json({error:{code:404,status:'NOT_FOUND',message:'Requested entity was not found.'}},404,{'content-type':'text/event-stream'}),()=>m.engine.executeTargets(m.runtime,m.runtime,m.input));
+ assert.equal(result.code,'UPSTREAM_NOT_FOUND');assert.equal(result.status,404);assert.equal(calls.length,1);
+});

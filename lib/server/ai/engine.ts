@@ -39,6 +39,7 @@ export interface EngineResult {
 const messages: Record<string, string> = {
     UPSTREAM_AUTH_FAILED: '上游鉴权或权限失败，请检查密钥与分组。', UPSTREAM_QUOTA: '上游余额或配额不足，请检查服务账户。',
     MODEL_NOT_FOUND: '上游模型不存在或当前分组无权使用。', UPSTREAM_RATE_LIMITED: '上游限流；请遵守 Retry-After，未轮换提供方。',
+    UPSTREAM_NOT_FOUND: '上游资源不存在；请检查模型映射、账户及分组可用性。目录列出模型不代表可以调用。',
     UPSTREAM_TIMEOUT: '请求超时；上游是否执行不确定，未自动重试。', UPSTREAM_TRANSPORT: '传输中断或重定向被拒绝；上游是否执行不确定，未自动重试。',
     OUTPUT_INVALID: '上游正文不符合所需数据结构，已拒绝使用。', OUTPUT_INCOMPLETE: '上游拒绝或输出未完成，未自动重复请求。',
     OUTPUT_EMPTY: '上游返回空正文；再次请求可能重复计费。', UPSTREAM_INVALID_RESPONSE: '上游返回非 JSON 或不支持的流式响应。',
@@ -58,6 +59,10 @@ function classify(status: number, payload: Json): string {
         return 'UPSTREAM_QUOTA';
     if (/model_not_found|model.*(?:not found|not exist)|模型.*不存在/i.test(detail))
         return 'MODEL_NOT_FOUND';
+    // Gemini's resource-level NOT_FOUND is not evidence of a missing HTTP route.
+    // Do not negotiate a different protocol for this response.
+    if (status === 404 && error.status === 'NOT_FOUND')
+        return 'UPSTREAM_NOT_FOUND';
     if ([404, 405, 501].includes(status) || [400, 422].includes(status) && unsupported(detail) && /endpoint|responses|chat\/completions/i.test(detail))
         return 'ENDPOINT_UNSUPPORTED';
     return status >= 500 ? 'UPSTREAM_FAILED' : 'UPSTREAM_REJECTED';
@@ -118,7 +123,9 @@ async function invoke(runtime: RuntimeTarget, input: EngineInput, budget: Budget
             const raw = await readAiBody(response, input.maxTokens ? 128000 : 20000000);
             let payload: Json;
             try {
-                if (/text\/event-stream/i.test(contentType))
+                // Some gateways retain the SSE header on a JSON error response.
+                // Decode those errors, while still rejecting successful streams.
+                if (response.ok && /text\/event-stream/i.test(contentType))
                     throw new Error('SSE unsupported');
                 payload = obj(JSON.parse(raw));
             }
